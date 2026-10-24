@@ -81,14 +81,22 @@ const Layout = () => {
             <header className="sticky top-0 z-50 w-full h-16 border-b border-border bg-card/95 backdrop-blur flex items-center justify-between px-4 lg:px-6 shadow-sm">
                 <div className="flex items-center gap-4">
                     <button
+                        aria-label="Open navigation menu"
+                        aria-expanded={isMobileMenuOpen}
                         className="lg:hidden p-2 rounded-md hover:bg-secondary"
                         onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
                     >
                         <Menu size={24} />
                     </button>
 
-                    <Link to="/" className="flex items-center gap-2 group">
-                        <img src="/favicon.png" alt="Logo" className="w-8 h-8 rounded-lg shadow-lg group-hover:scale-105 transition-transform" />
+                    <Link to="/" aria-label={`${appTitle} home`} className="flex items-center gap-2.5 sm:gap-3 group">
+                        <img
+                            src="/logo.png?v=20261024-logo-v2"
+                            alt={`${appTitle} logo`}
+                            width={44}
+                            height={44}
+                            className="w-11 h-11 sm:w-12 sm:h-12 shrink-0 rounded-xl object-cover ring-1 ring-border shadow-sm motion-safe:group-hover:scale-105 motion-safe:transition-transform"
+                        />
                         <span className="text-xl font-bold tracking-tight hidden sm:block">{appTitle}</span>
                     </Link>
                 </div>
@@ -319,7 +327,7 @@ const Layout = () => {
                         <div className="absolute inset-y-0 left-0 w-full sm:w-80 bg-background border-r border-border shadow-2xl flex flex-col p-4 animate-in slide-in-from-left">
                             <div className="flex justify-between items-center mb-8">
                                 <span className="font-bold text-xl">Menu</span>
-                                <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 hover:bg-secondary rounded-lg"><X size={24} /></button>
+                                <button aria-label="Close navigation menu" onClick={() => setIsMobileMenuOpen(false)} className="p-2 hover:bg-secondary rounded-lg"><X size={24} /></button>
                             </div>
                             <nav className="space-y-2 flex-1 overflow-y-auto">
                                 {navItems.map((item) => (

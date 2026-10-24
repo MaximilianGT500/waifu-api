@@ -38,9 +38,12 @@ public static class ConfigurationKeys
 
     public static class Discord
     {
-        public const string ClientId = "Discord:ClientId";
-        public const string ClientSecret = "Discord:ClientSecret";
-        public const string RedirectUri = "Discord:RedirectUri";
+        // Read from the shared .env (e.g. "DISCORD_CLIENT_ID=..."). These top-level keys are
+        // provided to the backend either via docker-compose env_file or by the .env loader in
+        // Program.cs when running locally.
+        public const string ClientId = "DISCORD_CLIENT_ID";
+        public const string ClientSecret = "DISCORD_CLIENT_SECRET";
+        public const string RedirectUri = "DISCORD_REDIRECT_URI";
     }
 
     public static class Jwt

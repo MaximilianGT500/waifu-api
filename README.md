@@ -1,33 +1,9 @@
-## ⚠️ API Shutdown Notice
-
-As of **October 24, 2026**, **waifu.im has been permanently shut down** and is no longer maintained.
-
-This repository will remain available temporarily but **will eventually be removed**.
-
-If you wish to continue using the API, you're free to migrate to one of the community-maintained alternatives listed below.
-
-### 🔄 Alternative Instances
-
-**KorryKatti's Instance**
-- **API:** https://waifu-api-eosin.vercel.app/
-- **Documentation:** https://waifu-api-docs.vercel.app/
-- **GitHub:** https://github.com/KorryKatti/waifu-api
-
-**Marek-SWK's Instance**
-- **API:** https://waifu.marek-server.com/
-- **Documentation:** https://waifu-docs.marek-server.com/
-- **GitHub:** https://github.com/Marek-SWK/waifu-api
-
-These instances are independently maintained. Their availability and continued operation are the responsibility of their respective maintainers.
-
-Thank you to everyone who used and supported waifu.im over the years. ❤️
-
 <div align="center">
-  <a href="https://waifu.im">
-    <img src="https://cdn.waifu.im/7892.jpg" alt="Waifu.im Logo" width="200" style="border-radius: 20px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);">
+  <a href="https://waifu.best">
+    <img src="https://waifu.best/logo.png" alt="Waifu.best Logo" width="200" style="border-radius: 20px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);">
   </a>
 
-  <h1>Waifu.im API</h1>
+  <h1>Waifu.best API</h1>
 
   <p>
     <strong>The versatile waifu image provider.</strong><br>
@@ -35,14 +11,14 @@ Thank you to everyone who used and supported waifu.im over the years. ❤️
   </p>
 
   <p>
-    <a href="https://waifu.im"><strong>Website</strong></a> •
-    <a href="https://docs.waifu.im"><strong>Documentation</strong></a> •
-    <a href="https://waifu.im/contact/"><strong>Support</strong></a>
+    <a href="https://waifu.best"><strong>Website</strong></a> •
+    <a href="https://docs.waifu.best"><strong>Documentation</strong></a> •
+    <a href="https://waifu.best/contact/"><strong>Support</strong></a>
   </p>
 
   <p>
-    <img src="https://img.shields.io/github/license/waifu-im/waifu-api?style=flat-square&color=5865F2" alt="License">
-    <img src="https://img.shields.io/github/stars/waifu-im/waifu-api?style=flat-square&color=5865F2" alt="Stars">
+    <img src="https://img.shields.io/github/license/maximiliangt500/waifu-api?style=flat-square&color=5865F2" alt="License">
+    <img src="https://img.shields.io/github/stars/maximiliangt500/waifu-api?style=flat-square&color=5865F2" alt="Stars">
     <img src="https://img.shields.io/badge/Docker-Ready-blue?style=flat-square&logo=docker&logoColor=white" alt="Docker">
   </p>
 </div>
@@ -85,7 +61,7 @@ Deploy your own instance of the Waifu.im API using Docker.
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/waifu-im/waifu-api.git
+   git clone https://github.com/maximiliangt500/waifu-api.git
    cd waifu-api
    ```
 
@@ -103,8 +79,8 @@ Deploy your own instance of the Waifu.im API using Docker.
    API_BASE_PATH="/"
 
    # Frontend
-   VITE_API_URL="https://api.waifu.im"
-   VITE_DISCORD_REDIRECT_URI="https://www.waifu.im/auth/callback"
+   VITE_API_URL="https://api.waifu.best"
+   VITE_DISCORD_REDIRECT_URI="https://www.waifu.best/auth/callback"
    ```
 
 3. **Launch**
@@ -170,5 +146,5 @@ A huge thank you to our community contributors who help expand our database:
 - **[Ruhannn](https://github.com/Ruhannn)** - Curated the `kamisato-ayaka` tag collection.
 
 <div align="center">
-  <sub>Built with ❤️ by the Waifu.im team.</sub>
+  <sub>Built with ❤️ by the Waifu.best team.</sub>
 </div>

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
@@ -39,6 +39,12 @@ public class S3Service : IStorageService
             ServiceURL = serviceUrl,
             AuthenticationRegion = region,
             ForcePathStyle = forcePathStyle,
+            // AWS SDK v4 sends trailing checksums by default (Content-Encoding:
+            // STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER), which S3-compatible
+            // stores like Cloudflare R2 reject with "not implemented". Only
+            // request/validate checksums when an operation strictly requires them.
+            RequestChecksumCalculation = RequestChecksumCalculation.WHEN_REQUIRED,
+            ResponseChecksumValidation = ResponseChecksumValidation.WHEN_REQUIRED,
         };
 
         if (!verifySsl)
@@ -58,7 +64,12 @@ public class S3Service : IStorageService
             InputStream = stream,
             ContentType = contentType,
             AutoCloseStream = false,
-            CannedACL = S3CannedACL.PublicRead
+            CannedACL = S3CannedACL.PublicRead,
+            // Cloudflare R2 does not support the SDK's streaming SigV4 upload
+            // (aws-chunked). Disable payload signing so the request goes out
+            // with Content-Length + UNSIGNED-PAYLOAD, which R2 supports.
+            DisablePayloadSigning = true,
+            DisableDefaultChecksumValidation = true,
         };
 
         await _s3Client.PutObjectAsync(request);

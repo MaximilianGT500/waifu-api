@@ -57,8 +57,10 @@ function HomepageHero() {
       <div className="container">
         <div className="homepage-hero__inner">
           <img
-            src={useBaseUrl("/img/favicon.png")}
-            alt={siteConfig.title}
+            src={useBaseUrl("/img/logo.png?v=20261024-logo-v2")}
+            alt={`${siteConfig.title} logo`}
+            width={128}
+            height={128}
             className="homepage-hero__logo"
           />
           <h1 className="homepage-hero__title">{siteConfig.title}</h1>

@@ -28,7 +28,7 @@ export function MetaTags({
   const fullTitle = title ? `${title} - ${appTitle}` : appTitle;
   const desc = description || defaultDescription;
   const canonicalUrl = url || window.location.href;
-  const siteIcon = `${window.location.origin}/android-chrome-512x512.png`;
+  const siteIcon = `${window.location.origin}/android-chrome-512x512.png?v=20261024-logo-v2`;
   const ogImage = (image && !isNsfw) ? image : siteIcon;
   const twitterCard = (image && !isNsfw) ? 'summary_large_image' : 'summary';
 

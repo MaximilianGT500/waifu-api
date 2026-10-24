@@ -25,7 +25,7 @@ const githubUrl = process.env.GITHUB_URL!;
 const config: Config = {
   title: appName,
   tagline: appTagline,
-  favicon: "img/favicon.png",
+  favicon: "img/favicon.png?v=20261024-logo-v2",
 
   url: process.env.DOCS_URL!,
   baseUrl: process.env.DOCS_BASE_URL!,
@@ -115,7 +115,7 @@ const config: Config = {
       tagName: "meta",
       attributes: {
         property: "og:image",
-        content: "img/favicon.png",
+        content: "img/social-icon.png?v=20261024-logo-v2",
       },
     },
     {
@@ -129,7 +129,7 @@ const config: Config = {
       tagName: "meta",
       attributes: {
         name: "twitter:image",
-        content: "img/favicon.png",
+        content: "img/social-icon.png?v=20261024-logo-v2",
       },
     },
   ],
@@ -153,7 +153,9 @@ const config: Config = {
       title: appName,
       logo: {
         alt: `${appName} Logo`,
-        src: "img/favicon.png",
+        src: "img/logo.png?v=20261024-logo-v2",
+        width: 44,
+        height: 44,
       },
       items: [
         {
