@@ -387,7 +387,7 @@ const Layout = () => {
 
                 {/* CONTENT AREA */}
                 <main className="flex-1 overflow-x-hidden overflow-y-auto bg-muted/20 relative">
-                <header className="w-full h-16 border-b border-border/80 bg-card/95 supports-[backdrop-filter]:bg-card/80 backdrop-blur flex items-center justify-between px-4 lg:px-6 shadow-sm">
+                <header className="relative z-40 w-full h-16 border-b border-border/80 bg-card/95 supports-[backdrop-filter]:bg-card/80 backdrop-blur flex items-center justify-between px-4 lg:px-6 shadow-sm">
                                 <div className="flex items-center gap-4">
                                     <button
                                         aria-label="Open navigation menu"
