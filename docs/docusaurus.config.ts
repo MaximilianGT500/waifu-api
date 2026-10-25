@@ -191,7 +191,6 @@ const config: Config = {
           items: [
             { label: "Introduction", to: "/docs/intro" },
             { label: "Getting Started", to: "/docs/getting-started" },
-            { label: "Tags", to: "/docs/tags" },
             { label: "API Reference", to: "/docs/category/api" },
           ],
         },

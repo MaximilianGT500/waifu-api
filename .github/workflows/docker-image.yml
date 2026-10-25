@@ -37,23 +37,15 @@ jobs:
       - name: Fetch all tags
         run: git fetch --tags --force
 
-      - name: Setup .NET (for minver on non-tag builds)
-        if: github.ref_type != 'tag'
-        uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: '10.0.x'
-
       - name: Calculate version
         id: version
-        working-directory: ./backend
         run: |
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
             VERSION="${{ github.ref_name }}"
             VERSION="${VERSION#v}"
           else
-            # Fallback to minver CLI for branch builds
-            dotnet tool install --global minver-cli
-            VERSION=$(minver --tag-prefix v)
+            # Branch/PR builds: no git-based version for the Go backend.
+            VERSION="0.0.0"
           fi
 
           MAJOR=$(echo $VERSION | cut -d. -f1)
@@ -110,8 +102,6 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta-backend.outputs.tags }}
           labels: ${{ steps.meta-backend.outputs.labels }}
-          build-args: |
-            VERSION=${{ steps.version.outputs.VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

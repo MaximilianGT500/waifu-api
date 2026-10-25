@@ -1,4 +1,4 @@
-﻿import { ImageDto, Role, ReviewStatus } from "../types";
+import { ImageDto, Role, ReviewStatus } from "../types";
 import { Heart, Trash2, Edit2, FolderMinus, FolderPlus, Clock, GitPullRequest } from "lucide-react";
 import { Link } from "react-router-dom";
 import TagChip from "./TagChip";
@@ -119,6 +119,7 @@ const ImageCard = ({ image, onDelete, onRemove, onEdit, onSuggest, forceOverlay 
                         src={imgCard(image.url)}
                         alt={`Img ${image.id}`}
                         loading="lazy"
+                        decoding="async"
                         onLoad={() => setIsImageLoaded(true)}
                         className={`w-full h-full object-cover transition-[opacity,transform] duration-700 xl:group-hover:scale-105 ${
                             isImageLoaded ? 'opacity-100' : 'opacity-0'

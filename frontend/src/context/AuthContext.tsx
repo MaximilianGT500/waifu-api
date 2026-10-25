@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Role, User } from '../types';
 import { useUser } from '../hooks/useUser';
 
@@ -47,6 +48,7 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
+  const queryClient = useQueryClient();
 
   // Use React Query to fetch user
   const { data: user, isLoading: userLoading, isError } = useUser(!!token);
@@ -85,7 +87,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const logout = () => {
     setToken(null);
     localStorage.removeItem('token');
-    // Clear React Query cache if possible or rely on page reload in UI component
+    // Drop all cached queries so no other user's data survives a logout/login.
+    queryClient.clear();
   };
 
   return (

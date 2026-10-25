@@ -7,19 +7,23 @@ services:
     env_file:
       - .env
     environment:
-      - ASPNETCORE_ENVIRONMENT=Production
-      - ConnectionStrings__DefaultConnection=Host=${POSTGRES_HOST};Port=${POSTGRES_PORT};Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      # In Docker the redirect target is always the public frontend URL.
       - DISCORD_REDIRECT_URI=${FRONTEND_URL:-http://localhost:5173}/auth/callback
-      # Cloudflare R2 rejects the AWS SDK v4 default trailer-based checksums
-      # (STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER not implemented).
-      - AWS_REQUEST_CHECKSUM_CALCULATION=when_required
-      - AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
+    volumes:
+      # Serve the checked-in OpenAPI spec at /openapi/v1.json (+ Scalar UI at /scalar).
+      - ./openapi/WaifuApi.Web.json:/app/openapi.json:ro
     ports:
       - "${BACKEND_PORT}:8080"
     depends_on:
       db:
         condition: service_healthy
     restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
   frontend:
     build:
@@ -46,7 +50,8 @@ services:
     ports:
       - "${FRONTEND_PORT}:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: always
 
   docs:

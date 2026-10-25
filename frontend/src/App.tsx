@@ -1,4 +1,4 @@
-﻿import { Routes, Route } from 'react-router-dom'
+import { Routes, Route } from 'react-router-dom'
 import Home from './pages/Home'
 import Login from './pages/Login'
 import Upload from './pages/Upload'
@@ -18,6 +18,8 @@ import MyReports from './pages/MyReports';
 import AdminStats from "@/pages/AdminStats.tsx";
 import StorageDiff from './pages/StorageDiff';
 import Contact from './pages/Contact';
+import Imprint from './pages/Imprint';
+import Privacy from './pages/Privacy';
 import SiteBannerSettings from './pages/SiteBannerSettings';
 import NotFound from './pages/NotFound';
 
@@ -45,6 +47,8 @@ function App() {
                 <Route path="storage-diff" element={<StorageDiff />} />
                 <Route path="site-banner" element={<SiteBannerSettings />} />
                 <Route path="contact" element={<Contact />} />
+                <Route path="imprint" element={<Imprint />} />
+                <Route path="privacy" element={<Privacy />} />
                 <Route path="auth/callback" element={<Callback />} />
                 <Route path="*" element={<NotFound />} />
             </Route>

@@ -1,33 +1,17 @@
-﻿# Build stage
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM golang:1.24-alpine AS build
 WORKDIR /src
 
-# Version passed from CI (calculated from git tags)
-ARG VERSION=0.0.0-local
+COPY go.mod ./
 
-# Copy solution and project files
-COPY ["WaifuApi.slnx", "./"]
-COPY ["WaifuApi.Web/WaifuApi.Web.csproj", "WaifuApi.Web/"]
-COPY ["WaifuApi.Application/WaifuApi.Application.csproj", "WaifuApi.Application/"]
-COPY ["WaifuApi.Domain/WaifuApi.Domain.csproj", "WaifuApi.Domain/"]
-COPY ["WaifuApi.Infrastructure/WaifuApi.Infrastructure.csproj", "WaifuApi.Infrastructure/"]
-
-# Restore dependencies
-RUN dotnet restore "WaifuApi.Web/WaifuApi.Web.csproj"
-
-# Copy the rest of the source code
 COPY . .
+RUN go mod tidy && \
+    CGO_ENABLED=0 GOOS=linux go build -mod=mod -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
 
-# Build and publish with explicit version
-WORKDIR "/src/WaifuApi.Web"
-RUN dotnet publish "WaifuApi.Web.csproj" -c Release -o /app/publish /p:UseAppHost=false /p:Version=${VERSION} /p:OpenApiGenerateDocumentsOnBuild=false
-
-# Runtime stage
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates tzdata && \
+    addgroup -S app && adduser -S -G app app
 WORKDIR /app
-
-# Install Kerberos library to suppress Npgsql GSSAPI warning
-RUN apt-get update && apt-get install -y --no-install-recommends libgssapi-krb5-2 && rm -rf /var/lib/apt/lists/*
-
-COPY --from=build /app/publish .
-ENTRYPOINT ["dotnet", "WaifuApi.Web.dll"]
+COPY --from=build /out/server /app/server
+USER app
+EXPOSE 8080
+ENTRYPOINT ["/app/server"]

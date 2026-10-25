@@ -6,12 +6,13 @@ title: Rate Limiting
 
 # Rate Limiting
 
-The API enforces rate limits to ensure fair usage for all consumers.
+The API enforces per-IP rate limits to ensure fair usage for all consumers
+(new in the Go backend; the limits are configurable by the API administrator).
 
 ## Limits
 
-- **Rate**: 20 requests per second (1 request every 50 milliseconds).
-- **Burst**: Up to 30 excess requests are accepted beyond the base rate. The first 15 are served immediately; the remaining 15 are queued and processed at the base rate (one every 50 ms).
+- **Rate**: `RATE_LIMIT_REQUESTS_PER_MINUTE` requests per minute (default: **240**).
+- **Burst**: `RATE_LIMIT_BURST` excess requests beyond the base rate (default: **40**).
 - **Rejection**: When the burst buffer is full, the API responds with HTTP `429 Too Many Requests`.
 - **`Retry-After` header**: Included in every `429` response. It indicates how many seconds to wait before retrying.
 

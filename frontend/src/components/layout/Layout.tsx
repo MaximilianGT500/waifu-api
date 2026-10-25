@@ -1,10 +1,10 @@
-﻿import { Outlet, Link, useLocation } from 'react-router-dom';
+import { Outlet, Link, useLocation } from 'react-router-dom';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import {
     Sun, Moon, Menu, X, LogOut, Upload as UploadIcon,
     Home, Image as ImageIcon, Tag as TagIcon, ChevronRight, PanelLeft,
-    User as UserIcon, Library, ChevronDown, Palette, Key, Users as UsersIcon, Flag, BarChart, Monitor, Book, Mail, Activity, HardDrive, Github, FileText, GitPullRequest, Megaphone
+    User as UserIcon, Library, ChevronDown, Palette, Key, Users as UsersIcon, Flag, BarChart, Monitor, Book, Mail, Activity, HardDrive, Github, FileText, GitPullRequest, Megaphone, Scale, ShieldCheck
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -78,7 +78,7 @@ const Layout = () => {
             <GlobalErrorHandler />
 
             {/* 1. TOP NAVBAR */}
-            <header className="sticky top-0 z-50 w-full h-16 border-b border-border bg-card/95 backdrop-blur flex items-center justify-between px-4 lg:px-6 shadow-sm">
+            <header className="sticky top-0 z-50 w-full h-16 border-b border-border/80 bg-card/95 supports-[backdrop-filter]:bg-card/80 backdrop-blur flex items-center justify-between px-4 lg:px-6 shadow-sm">
                 <div className="flex items-center gap-4">
                     <button
                         aria-label="Open navigation menu"
@@ -196,7 +196,7 @@ const Layout = () => {
             </header>
 
             {/* 2. MAIN LAYOUT */}
-            <div className="flex flex-1 overflow-hidden relative">
+            <div className="flex flex-1 min-h-0 overflow-hidden relative">
 
                 {/* DESKTOP SIDEBAR - Cleaned up */}
                 <aside
@@ -204,7 +204,13 @@ const Layout = () => {
                         isSidebarCollapsed ? 'w-20' : 'w-64'
                     }`}
                 >
-                    <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
+                    <nav className="flex-1 p-4 space-y-1.5 overflow-y-auto">
+                        {!isSidebarCollapsed && (
+                            <p className="px-3 pt-1 pb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground/60 select-none">
+                                Browse
+                            </p>
+                        )}
+
                         {navItems.map((item) => (
                             <Link
                                 key={item.path}
@@ -212,7 +218,7 @@ const Layout = () => {
                                 className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all group relative overflow-hidden ${
                                     isActive(item.path)
                                         ? 'bg-primary text-primary-foreground font-bold shadow-md'
-                                        : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+                                        : 'text-muted-foreground hover:bg-secondary hover:text-foreground motion-safe:hover:translate-x-0.5'
                                 } ${isSidebarCollapsed ? 'justify-center' : ''}`}
                                 title={isSidebarCollapsed ? item.name : ''}
                             >
@@ -221,24 +227,36 @@ const Layout = () => {
                             </Link>
                         ))}
 
-                        <div className="my-4 border-t border-border mx-2 opacity-50"></div>
+                        <div className="!my-4 border-t border-border mx-2 opacity-50"></div>
+
+                        {!isSidebarCollapsed && (
+                            <p className="px-3 pb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground/60 select-none">
+                                Actions
+                            </p>
+                        )}
 
                         <Link
                             to="/upload"
                             className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all ${
                                 isActive('/upload')
-                                    ? 'bg-secondary text-foreground font-bold'
-                                    : 'bg-secondary/30 text-foreground hover:bg-secondary font-medium'
+                                    ? 'bg-secondary text-foreground font-bold shadow-sm'
+                                    : 'bg-secondary/30 text-foreground hover:bg-secondary font-medium motion-safe:hover:translate-x-0.5'
                             } ${isSidebarCollapsed ? 'justify-center' : ''}`}
                         >
                             <UploadIcon size={22} className="shrink-0" />
                             {!isSidebarCollapsed && <span>Upload</span>}
                         </Link>
 
-                        {/* Dynamic Links Section */}
-                        {(docsUrl || showContact || statusUrl || githubUrl || tosUrl) && (
+                        {/* Dynamic Links Section - always rendered (imprint/privacy are permanent) */}
+                        {(
                             <>
-                                <div className="my-4 border-t border-border mx-2 opacity-50"></div>
+                                <div className="!my-4 border-t border-border mx-2 opacity-50"></div>
+
+                                {!isSidebarCollapsed && (
+                                    <p className="px-3 pb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground/60 select-none">
+                                        More
+                                    </p>
+                                )}
 
                                 {docsUrl && (
                                     <a
@@ -292,12 +310,38 @@ const Layout = () => {
                                     </a>
                                 )}
 
+                                <Link
+                                    to="/imprint"
+                                    className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all ${
+                                        isActive('/imprint')
+                                            ? 'bg-secondary text-foreground font-bold shadow-sm'
+                                            : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+                                    } ${isSidebarCollapsed ? 'justify-center' : ''}`}
+                                    title={isSidebarCollapsed ? 'Imprint' : ''}
+                                >
+                                    <Scale size={22} className="shrink-0" />
+                                    {!isSidebarCollapsed && <span>Imprint</span>}
+                                </Link>
+
+                                <Link
+                                    to="/privacy"
+                                    className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all ${
+                                        isActive('/privacy')
+                                            ? 'bg-secondary text-foreground font-bold shadow-sm'
+                                            : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+                                    } ${isSidebarCollapsed ? 'justify-center' : ''}`}
+                                    title={isSidebarCollapsed ? 'Privacy' : ''}
+                                >
+                                    <ShieldCheck size={22} className="shrink-0" />
+                                    {!isSidebarCollapsed && <span>Privacy</span>}
+                                </Link>
+
                                 {showContact && (
                                     <Link
                                         to="/contact"
                                         className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all ${
                                             isActive('/contact')
-                                                ? 'bg-secondary text-foreground font-bold'
+                                                ? 'bg-secondary text-foreground font-bold shadow-sm'
                                                 : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
                                         } ${isSidebarCollapsed ? 'justify-center' : ''}`}
                                         title={isSidebarCollapsed ? 'Contact' : ''}
@@ -312,6 +356,7 @@ const Layout = () => {
 
                     <div className="p-4 border-t border-border mt-auto">
                         <button
+                            aria-label={isSidebarCollapsed ? 'Expand navigation menu' : 'Collapse navigation menu'}
                             onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
                             className="w-full flex items-center justify-center p-2 rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
                         >
@@ -330,6 +375,9 @@ const Layout = () => {
                                 <button aria-label="Close navigation menu" onClick={() => setIsMobileMenuOpen(false)} className="p-2 hover:bg-secondary rounded-lg"><X size={24} /></button>
                             </div>
                             <nav className="space-y-2 flex-1 overflow-y-auto">
+                                <p className="px-4 pt-1 pb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground/60">
+                                    Browse
+                                </p>
                                 {navItems.map((item) => (
                                     <Link
                                         key={item.path}
@@ -345,6 +393,9 @@ const Layout = () => {
 
                                 <div className="my-2 border-t border-border opacity-50"></div>
 
+                                <p className="px-4 pb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground/60">
+                                    Actions
+                                </p>
                                 <Link
                                     to="/upload"
                                     onClick={() => setIsMobileMenuOpen(false)}
@@ -355,9 +406,13 @@ const Layout = () => {
                                     <UploadIcon size={20} /> Upload
                                 </Link>
 
-                                {(docsUrl || showContact || statusUrl || githubUrl || tosUrl) && (
+                                {(
                                     <>
                                         <div className="my-2 border-t border-border opacity-50"></div>
+
+                                        <p className="px-4 pb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground/60">
+                                            More
+                                        </p>
 
                                         {docsUrl && (
                                             <a
@@ -403,6 +458,26 @@ const Layout = () => {
                                             </a>
                                         )}
 
+                                        <Link
+                                            to="/imprint"
+                                            onClick={() => setIsMobileMenuOpen(false)}
+                                            className={`flex items-center gap-3 px-4 py-3 rounded-xl font-medium ${
+                                                isActive('/imprint') ? 'bg-secondary text-foreground' : 'text-muted-foreground'
+                                            }`}
+                                        >
+                                            <Scale size={20} /> Imprint
+                                        </Link>
+
+                                        <Link
+                                            to="/privacy"
+                                            onClick={() => setIsMobileMenuOpen(false)}
+                                            className={`flex items-center gap-3 px-4 py-3 rounded-xl font-medium ${
+                                                isActive('/privacy') ? 'bg-secondary text-foreground' : 'text-muted-foreground'
+                                            }`}
+                                        >
+                                            <ShieldCheck size={20} /> Privacy
+                                        </Link>
+
                                         {showContact && (
                                             <Link
                                                 to="/contact"
@@ -422,7 +497,7 @@ const Layout = () => {
                 )}
 
                 {/* CONTENT AREA */}
-                <main className="flex-1 overflow-x-hidden overflow-y-auto bg-muted/20 h-[calc(100vh-4rem)] relative">
+                <main className="flex-1 overflow-x-hidden overflow-y-auto bg-muted/20 relative">
                     <SiteBanner />
                     <Outlet />
                 </main>

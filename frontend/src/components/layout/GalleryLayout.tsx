@@ -1,6 +1,7 @@
-﻿import { useState, ReactNode } from 'react';
+import { useState, ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { ImageDto, Role, ImageFormData, ImageOrderBy, ReviewableContentType } from '../../types';
+import { ImageDto, Role, ImageFormData, ImageOrderBy, NsfwMode, PaginatedList, ReviewableContentType } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useNotification } from '../../context/NotificationContext';
 import { useImageUpdate } from '../../hooks/useImageUpdate';
@@ -13,7 +14,7 @@ import FloatingRefreshButton from '../FloatingRefreshButton';
 import ConfirmModal from '../modals/ConfirmModal';
 import ImageModal from '../modals/ImageModal';
 import { Option } from '../SearchableSelect';
-import { Search, Tags } from 'lucide-react';
+import { Search, Tags, Shuffle, Loader2 } from 'lucide-react';
 import { useTagView } from '../../hooks/useTagView';
 
 interface GalleryLayoutProps {
@@ -53,6 +54,7 @@ export const GalleryLayout = ({
     const { showNotification } = useNotification();
     const { updateImage } = useImageUpdate();
     const queryClient = useQueryClient();
+    const navigate = useNavigate();
 
     const { showTags, toggle: toggleTags } = useTagView();
 
@@ -63,6 +65,28 @@ export const GalleryLayout = ({
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [suggestingImage, setSuggestingImage] = useState<ImageDto | null>(null);
     const [isSuggestModalOpen, setIsSuggestModalOpen] = useState(false);
+    const [isSurprising, setIsSurprising] = useState(false);
+
+    const surpriseMe = async () => {
+        if (isSurprising) return;
+        setIsSurprising(true);
+        try {
+            const isNsfw = searchParams.get('isNsfw') || NsfwMode.False;
+            const { data } = await api.get<PaginatedList<ImageDto>>('/images', {
+                params: { isNsfw, orderBy: ImageOrderBy.Random, pageSize: 1 },
+                skipGlobalErrorHandler: true,
+            });
+            if (data.items.length > 0) {
+                navigate(`/images/${data.items[0].id}`);
+            } else {
+                showNotification('info', 'No images found for the current filters');
+            }
+        } catch {
+            showNotification('error', 'Could not fetch a random image');
+        } finally {
+            setIsSurprising(false);
+        }
+    };
 
     const isAdmin = user?.role === Role.Admin;
     const isAdminOrModerator = user && (user.role === Role.Admin || user.role === Role.Moderator);
@@ -117,6 +141,14 @@ export const GalleryLayout = ({
                             )}
                         </div>
                         <div className="flex items-center self-end md:self-start shrink-0 gap-2">
+                            <button
+                                onClick={surpriseMe}
+                                disabled={isSurprising}
+                                title="Surprise me with a random image"
+                                className="p-2.5 rounded-lg border transition-colors disabled:opacity-60 bg-card text-muted-foreground border-border hover:text-foreground"
+                            >
+                                {isSurprising ? <Loader2 size={20} className="animate-spin" /> : <Shuffle size={20} />}
+                            </button>
                             <button
                                 onClick={toggleTags}
                                 title={showTags ? 'Hide tags' : 'Show tags'}

@@ -1,0 +1,1757 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "Waifu API",
+    "description": "The API for your Waifu content. Access thousands of categorized anime illustrations via our robust REST API or browse freely.",
+    "version": "7.0.0",
+    "contact": {
+      "email": "support@lunoxia.de"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://api.waifu.best"
+    }
+  ],
+  "tags": [
+    { "name": "Authentication" },
+    { "name": "Users" },
+    { "name": "Images" },
+    { "name": "Tags" },
+    { "name": "Artists" },
+    { "name": "Albums" },
+    { "name": "Review" },
+    { "name": "Reports" },
+    { "name": "Banner" },
+    { "name": "Stats" },
+    { "name": "StorageDiff" }
+  ],
+  "paths": {
+    "/auth/discord": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Login with Discord OAuth2",
+        "description": "Exchange a Discord OAuth2 authorization code for a JWT token. The token should be sent as `Authorization: Bearer {token}`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["code"],
+                "properties": {
+                  "code": { "type": "string", "description": "The Discord authorization code." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Returns the JWT token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Invalid or expired authorization code." }
+        }
+      }
+    },
+    "/auth/api-keys": {
+      "get": {
+        "tags": ["Authentication"],
+        "summary": "List your API keys",
+        "security": [{ "Bearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Returns the list of API keys.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/ApiKeyDto" }
+                }
+              }
+            }
+          },
+          "401": { "description": "Authentication required." }
+        }
+      },
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Create a new API key",
+        "description": "The full API key is only shown once in the response. Use it as `X-Api-Key: {your_key}`.",
+        "security": [{ "Bearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["description"],
+                "properties": {
+                  "description": { "type": "string", "maxLength": 100, "minLength": 3 },
+                  "expirationDate": { "type": "string", "format": "date-time", "nullable": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "API key created successfully.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CreatedApiKeyDto" }
+              }
+            }
+          },
+          "400": { "description": "Invalid request data." },
+          "401": { "description": "Authentication required." }
+        }
+      }
+    },
+    "/auth/api-keys/{id}": {
+      "patch": {
+        "tags": ["Authentication"],
+        "summary": "Update an API key",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["description"],
+                "properties": {
+                  "description": { "type": "string", "maxLength": 100, "minLength": 3 },
+                  "expirationDate": { "type": "string", "format": "date-time", "nullable": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "API key updated successfully.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiKeyDto" }
+              }
+            }
+          },
+          "400": { "description": "Invalid update data." },
+          "401": { "description": "Authentication required." },
+          "404": { "description": "API key not found or doesn't belong to you." }
+        }
+      },
+      "delete": {
+        "tags": ["Authentication"],
+        "summary": "Revoke (delete) an API key",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "204": { "description": "API key revoked successfully." },
+          "401": { "description": "Authentication required." },
+          "404": { "description": "API key not found or doesn't belong to you." }
+        }
+      }
+    },
+    "/users/me": {
+      "get": {
+        "tags": ["Users"],
+        "summary": "Get your user profile",
+        "security": [{ "Bearer": [] }, { "ApiKey": [] }],
+        "responses": {
+          "200": {
+            "description": "Returns the current user.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/UserDto" }
+              }
+            }
+          },
+          "401": { "description": "Authentication required." }
+        }
+      }
+    },
+    "/users/me/permissions": {
+      "get": {
+        "tags": ["Users"],
+        "summary": "Get your permissions",
+        "security": [{ "Bearer": [] }, { "ApiKey": [] }],
+        "responses": {
+          "200": {
+            "description": "Returns permission flags.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "canManageBanner": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Authentication required." }
+        }
+      }
+    },
+    "/users/{id}": {
+      "get": {
+        "tags": ["Users"],
+        "summary": "Get a user (moderator+)",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the user.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/UserMinimalDto" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users": {
+      "get": {
+        "tags": ["Users"],
+        "summary": "List users (admin)",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "name", "in": "query", "schema": { "type": "string" } },
+          { "name": "includedIds", "in": "query", "schema": { "type": "array", "items": { "type": "integer", "format": "int64" } } },
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "pageSize", "in": "query", "schema": { "type": "integer", "default": 30 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the users.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PaginatedUserDto" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users/{id}/role": {
+      "put": {
+        "tags": ["Users"],
+        "summary": "Set a user's role (admin)",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["role"],
+                "properties": {
+                  "role": { "$ref": "#/components/schemas/Role" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Role updated." },
+          "400": { "description": "You cannot change your own role." }
+        }
+      }
+    },
+    "/users/{id}/ban": {
+      "put": {
+        "tags": ["Users"],
+        "summary": "Ban or unban a user (admin)",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "isBlacklisted": { "type": "boolean" },
+                  "reason": { "type": "string", "nullable": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Ban state updated." },
+          "400": { "description": "You cannot ban yourself." }
+        }
+      }
+    },
+    "/users/{userId}/albums": {
+      "get": {
+        "tags": ["Albums"],
+        "summary": "List a user's albums",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "userId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "User id or \"me\"" },
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "pageSize", "in": "query", "schema": { "type": "integer", "default": 30 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the albums.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PaginatedAlbumDto" }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Albums"],
+        "summary": "Create an album",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "userId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": { "type": "string", "maxLength": 30 },
+                  "description": { "type": "string", "maxLength": 150 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Album created.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AlbumDto" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users/{userId}/albums/{albumId}": {
+      "get": {
+        "tags": ["Albums"],
+        "summary": "Get an album",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "userId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "albumId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Album id or \"favorites\"" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the album.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AlbumDto" }
+              }
+            }
+          },
+          "404": { "description": "Album not found." }
+        }
+      },
+      "patch": {
+        "tags": ["Albums"],
+        "summary": "Update an album",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "userId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "albumId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "maxLength": 30 },
+                  "description": { "type": "string", "maxLength": 150 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Album updated.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AlbumDto" }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["Albums"],
+        "summary": "Delete an album",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "userId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "albumId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "204": { "description": "Album deleted." },
+          "400": { "description": "Cannot delete the default album." }
+        }
+      }
+    },
+    "/users/{userId}/albums/{albumId}/images": {
+      "get": {
+        "tags": ["Albums"],
+        "summary": "List the images of an album",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "userId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "albumId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "$ref": "#/components/parameters/Page" },
+          { "$ref": "#/components/parameters/PageSize" },
+          { "$ref": "#/components/parameters/IsNsfw" },
+          { "$ref": "#/components/parameters/IsAnimated" },
+          { "$ref": "#/components/parameters/OrderBy" },
+          { "$ref": "#/components/parameters/Orientation" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the images.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PaginatedImageDto" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users/{userId}/albums/{albumId}/images/{imageId}": {
+      "post": {
+        "tags": ["Albums"],
+        "summary": "Add an image to an album (idempotent)",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "userId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "albumId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "imageId", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": { "204": { "description": "Image added." } }
+      },
+      "delete": {
+        "tags": ["Albums"],
+        "summary": "Remove an image from an album",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "userId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "albumId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "imageId", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": { "204": { "description": "Image removed." } }
+      }
+    },
+    "/images": {
+      "get": {
+        "tags": ["Images"],
+        "summary": "Search images",
+        "parameters": [
+          { "$ref": "#/components/parameters/Page" },
+          { "$ref": "#/components/parameters/PageSize" },
+          { "$ref": "#/components/parameters/IsNsfw" },
+          { "$ref": "#/components/parameters/IsAnimated" },
+          { "$ref": "#/components/parameters/OrderBy" },
+          { "$ref": "#/components/parameters/Orientation" },
+          { "name": "includedTags", "in": "query", "schema": { "type": "array", "items": { "type": "string" } } },
+          { "name": "excludedTags", "in": "query", "schema": { "type": "array", "items": { "type": "string" } } },
+          { "name": "includedArtists", "in": "query", "schema": { "type": "array", "items": { "type": "string" } } },
+          { "name": "excludedArtists", "in": "query", "schema": { "type": "array", "items": { "type": "string" } } },
+          { "name": "includedIds", "in": "query", "schema": { "type": "array", "items": { "type": "integer", "format": "int64" } } },
+          { "name": "excludedIds", "in": "query", "schema": { "type": "array", "items": { "type": "integer", "format": "int64" } } },
+          { "name": "width", "in": "query", "schema": { "type": "string" } },
+          { "name": "height", "in": "query", "schema": { "type": "string" } },
+          { "name": "byteSize", "in": "query", "schema": { "type": "string" } },
+          { "name": "uploaderId", "in": "query", "schema": { "type": "integer", "format": "int64" }, "description": "Moderators only" },
+          { "name": "reviewStatus", "in": "query", "schema": { "$ref": "#/components/schemas/ReviewStatusFilter" } },
+          { "name": "includeMyPending", "in": "query", "schema": { "type": "boolean" } },
+          { "name": "includeMyPendingChildren", "in": "query", "schema": { "type": "boolean" } },
+          { "name": "childrenReviewStatus", "in": "query", "schema": { "$ref": "#/components/schemas/ReviewStatusFilter" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the images.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PaginatedImageDto" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/images/upload": {
+      "post": {
+        "tags": ["Images"],
+        "summary": "Upload an image",
+        "security": [{ "Bearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file"],
+                "properties": {
+                  "file": { "type": "string", "format": "binary" },
+                  "artists": { "type": "array", "items": { "type": "integer", "format": "int64" } },
+                  "tags": { "type": "array", "items": { "type": "string" } },
+                  "source": { "type": "string" },
+                  "isNsfw": { "type": "string", "default": "false" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Image uploaded.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ImageDto" }
+              }
+            }
+          },
+          "400": { "description": "Invalid image (dimensions, format)." },
+          "404": { "description": "Artists with IDs ... not found. / Tags with slugs ... not found." },
+          "409": { "description": "Duplicate image found. ID: {id}" }
+        }
+      }
+    },
+    "/images/{id}": {
+      "get": {
+        "tags": ["Images"],
+        "summary": "Get an image",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "childrenReviewStatus", "in": "query", "schema": { "$ref": "#/components/schemas/ReviewStatusFilter" } },
+          { "name": "includeMyPendingChildren", "in": "query", "schema": { "type": "boolean" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the image.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ImageDto" }
+              }
+            }
+          },
+          "404": { "description": "Image with ID {id} not found." }
+        }
+      },
+      "patch": {
+        "tags": ["Images"],
+        "summary": "Update an image (moderator+)",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": { "type": "string", "format": "binary" },
+                  "source": { "type": "string" },
+                  "isNsfw": { "type": "string" },
+                  "userId": { "type": "integer", "format": "int64" },
+                  "tags": { "type": "array", "items": { "type": "string" } },
+                  "artists": { "type": "array", "items": { "type": "integer", "format": "int64" } },
+                  "reviewStatus": { "$ref": "#/components/schemas/ReviewStatus" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Returns the updated image.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ImageDto" }
+              }
+            }
+          },
+          "404": { "description": "Image with ID {id} not found." }
+        }
+      },
+      "delete": {
+        "tags": ["Images"],
+        "summary": "Delete an image (admin)",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "204": { "description": "Image deleted." },
+          "404": { "description": "Image with ID {id} not found." }
+        }
+      }
+    },
+    "/tags": {
+      "get": {
+        "tags": ["Tags"],
+        "summary": "Search tags",
+        "parameters": [
+          { "name": "name", "in": "query", "schema": { "type": "string" } },
+          { "name": "includedIds", "in": "query", "schema": { "type": "array", "items": { "type": "integer", "format": "int64" } } },
+          { "name": "includedSlugs", "in": "query", "schema": { "type": "array", "items": { "type": "string" } } },
+          { "$ref": "#/components/parameters/Page" },
+          { "$ref": "#/components/parameters/PageSize" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the tags.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PaginatedTagDto" }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Tags"],
+        "summary": "Create a tag",
+        "security": [{ "Bearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "description"],
+                "properties": {
+                  "name": { "type": "string", "maxLength": 30 },
+                  "description": { "type": "string", "maxLength": 150 },
+                  "slug": { "type": "string", "maxLength": 50, "pattern": "^[a-z0-9-]+$" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Tag created.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TagDto" }
+              }
+            }
+          },
+          "409": { "description": "Tag with slug/name already exists." }
+        }
+      }
+    },
+    "/tags/by-slug/{slug}": {
+      "get": {
+        "tags": ["Tags"],
+        "summary": "Get a tag by slug",
+        "parameters": [
+          { "name": "slug", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the tag.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TagDto" }
+              }
+            }
+          },
+          "404": { "description": "Tag with slug '{slug}' not found." }
+        }
+      }
+    },
+    "/tags/{id}": {
+      "get": {
+        "tags": ["Tags"],
+        "summary": "Get a tag",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the tag.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TagDto" }
+              }
+            }
+          },
+          "404": { "description": "Tag with ID {id} not found." }
+        }
+      },
+      "patch": {
+        "tags": ["Tags"],
+        "summary": "Update a tag (moderator+)",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "maxLength": 30 },
+                  "description": { "type": "string", "maxLength": 150 },
+                  "slug": { "type": "string", "maxLength": 50, "pattern": "^[a-z0-9-]+$" },
+                  "reviewStatus": { "$ref": "#/components/schemas/ReviewStatus" },
+                  "creatorId": { "type": "integer", "format": "int64", "nullable": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Returns the updated tag.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TagDto" }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["Tags"],
+        "summary": "Delete a tag (admin)",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": { "204": { "description": "Tag deleted." } }
+      }
+    },
+    "/artists": {
+      "get": {
+        "tags": ["Artists"],
+        "summary": "Search artists",
+        "parameters": [
+          { "name": "name", "in": "query", "schema": { "type": "string" } },
+          { "name": "includedIds", "in": "query", "schema": { "type": "array", "items": { "type": "integer", "format": "int64" } } },
+          { "$ref": "#/components/parameters/Page" },
+          { "$ref": "#/components/parameters/PageSize" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the artists.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PaginatedArtistDto" }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Artists"],
+        "summary": "Create an artist",
+        "security": [{ "Bearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": { "type": "string", "maxLength": 30 },
+                  "patreon": { "type": "string", "maxLength": 200, "nullable": true },
+                  "pixiv": { "type": "string", "maxLength": 200, "nullable": true },
+                  "twitter": { "type": "string", "maxLength": 200, "nullable": true },
+                  "deviantArt": { "type": "string", "maxLength": 200, "nullable": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Artist created.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ArtistEntity" }
+              }
+            }
+          },
+          "409": { "description": "Artist with name/link already exists." }
+        }
+      }
+    },
+    "/artists/by-name/{name}": {
+      "get": {
+        "tags": ["Artists"],
+        "summary": "Get an artist by name (case-sensitive)",
+        "parameters": [
+          { "name": "name", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the artist.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ArtistEntity" }
+              }
+            }
+          },
+          "404": { "description": "Artist with name '{name}' not found." }
+        }
+      }
+    },
+    "/artists/{id}": {
+      "get": {
+        "tags": ["Artists"],
+        "summary": "Get an artist",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the artist.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ArtistDto" }
+              }
+            }
+          },
+          "404": { "description": "Artist with ID {id} not found." }
+        }
+      },
+      "patch": {
+        "tags": ["Artists"],
+        "summary": "Update an artist (moderator+)",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "maxLength": 30 },
+                  "patreon": { "type": "string", "maxLength": 200, "nullable": true },
+                  "pixiv": { "type": "string", "maxLength": 200, "nullable": true },
+                  "twitter": { "type": "string", "maxLength": 200, "nullable": true },
+                  "deviantArt": { "type": "string", "maxLength": 200, "nullable": true },
+                  "reviewStatus": { "$ref": "#/components/schemas/ReviewStatus" },
+                  "creatorId": { "type": "integer", "format": "int64", "nullable": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Returns the updated artist.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ArtistEntity" }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["Artists"],
+        "summary": "Delete an artist (admin)",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": { "204": { "description": "Artist deleted." } }
+      }
+    },
+    "/review/tasks": {
+      "get": {
+        "tags": ["Review"],
+        "summary": "List review tasks",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "status", "in": "query", "schema": { "$ref": "#/components/schemas/ReviewTaskStatus" } },
+          { "name": "kind", "in": "query", "schema": { "$ref": "#/components/schemas/ReviewTaskKind" } },
+          { "name": "targetType", "in": "query", "schema": { "$ref": "#/components/schemas/ReviewableContentType" } },
+          { "name": "targetId", "in": "query", "schema": { "type": "integer", "format": "int64" } },
+          { "name": "mine", "in": "query", "schema": { "type": "boolean" } },
+          { "$ref": "#/components/parameters/Page" },
+          { "$ref": "#/components/parameters/PageSize" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the review tasks.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PaginatedReviewTaskDto" }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Review"],
+        "summary": "Submit an edit request",
+        "security": [{ "Bearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["targetType", "targetId", "payload"],
+                "properties": {
+                  "targetType": { "$ref": "#/components/schemas/ReviewableContentType" },
+                  "targetId": { "type": "integer", "format": "int64" },
+                  "reason": { "type": "string", "nullable": true },
+                  "payload": { "type": "object" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Edit request created (or auto-applied).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ReviewTaskDto" }
+              }
+            }
+          },
+          "400": { "description": "The proposed changes are empty or identical to the current values." },
+          "404": { "description": "Target not found." },
+          "409": { "description": "Pending edit exists / too many pending edits." }
+        }
+      }
+    },
+    "/review/tasks/{id}": {
+      "get": {
+        "tags": ["Review"],
+        "summary": "Get a review task",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the review task.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ReviewTaskDto" }
+              }
+            }
+          },
+          "404": { "description": "Review task not found." }
+        }
+      },
+      "patch": {
+        "tags": ["Review"],
+        "summary": "Edit your pending review task",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "content": { "type": "object" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Returns the updated task.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ReviewTaskDto" }
+              }
+            }
+          },
+          "403": { "description": "You can only edit your own submissions." },
+          "409": { "description": "This review task has already been resolved." }
+        }
+      }
+    },
+    "/review/tasks/{id}/approve": {
+      "patch": {
+        "tags": ["Review"],
+        "summary": "Approve a review task (moderator+)",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "204": { "description": "Task approved." },
+          "404": { "description": "Review task not found." },
+          "409": { "description": "This review task has already been resolved." }
+        }
+      }
+    },
+    "/review/tasks/{id}/reject": {
+      "patch": {
+        "tags": ["Review"],
+        "summary": "Reject a review task (moderator+)",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": { "type": "string", "nullable": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": { "description": "Task rejected." },
+          "404": { "description": "Review task not found." },
+          "409": { "description": "This review task has already been resolved." }
+        }
+      }
+    },
+    "/review/tasks/{id}/cancel": {
+      "patch": {
+        "tags": ["Review"],
+        "summary": "Cancel a review task",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "204": { "description": "Task cancelled." },
+          "403": { "description": "You can only cancel your own submissions." },
+          "409": { "description": "This review task has already been resolved." }
+        }
+      }
+    },
+    "/reports": {
+      "get": {
+        "tags": ["Reports"],
+        "summary": "List reports",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "status", "in": "query", "schema": { "$ref": "#/components/schemas/ReportStatus" } },
+          { "name": "mine", "in": "query", "schema": { "type": "boolean" } },
+          { "$ref": "#/components/parameters/Page" },
+          { "$ref": "#/components/parameters/PageSize" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the reports.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PaginatedReportDto" }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Reports"],
+        "summary": "Report an image",
+        "security": [{ "Bearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["imageId", "description"],
+                "properties": {
+                  "imageId": { "type": "integer", "format": "int64" },
+                  "description": { "type": "string", "maxLength": 500 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Report created.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ReportDto" }
+              }
+            }
+          },
+          "409": { "description": "You already have a pending report for this image." }
+        }
+      }
+    },
+    "/reports/{id}": {
+      "patch": {
+        "tags": ["Reports"],
+        "summary": "Edit a pending report",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "description": { "type": "string", "maxLength": 500 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Returns the updated report.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ReportDto" }
+              }
+            }
+          },
+          "403": { "description": "You can only edit your own reports." },
+          "409": { "description": "This report has already been handled and can no longer be edited." }
+        }
+      }
+    },
+    "/reports/{id}/validate": {
+      "patch": {
+        "tags": ["Reports"],
+        "summary": "Validate a report (moderator+)",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": { "type": "string", "nullable": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": { "description": "Report validated." },
+          "409": { "description": "This report has already been handled." }
+        }
+      }
+    },
+    "/reports/{id}/reject": {
+      "patch": {
+        "tags": ["Reports"],
+        "summary": "Reject a report (moderator+)",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": { "type": "string", "nullable": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": { "description": "Report rejected." },
+          "409": { "description": "This report has already been handled." }
+        }
+      }
+    },
+    "/reports/{id}/cancel": {
+      "patch": {
+        "tags": ["Reports"],
+        "summary": "Cancel a report",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } }
+        ],
+        "responses": {
+          "204": { "description": "Report cancelled." },
+          "403": { "description": "You can only cancel your own reports." },
+          "409": { "description": "This report has already been handled." }
+        }
+      }
+    },
+    "/banner": {
+      "get": {
+        "tags": ["Banner"],
+        "summary": "Get the active site banner",
+        "responses": {
+          "200": {
+            "description": "Returns the banner.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string" },
+                    "variant": { "$ref": "#/components/schemas/BannerVariant" },
+                    "updatedAt": { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          },
+          "204": { "description": "No active banner." }
+        }
+      }
+    },
+    "/banner/settings": {
+      "get": {
+        "tags": ["Banner"],
+        "summary": "Get banner settings",
+        "security": [{ "Bearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Returns the banner settings.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BannerSettingsDto" }
+              }
+            }
+          },
+          "403": { "description": "Insufficient role." }
+        }
+      },
+      "put": {
+        "tags": ["Banner"],
+        "summary": "Update banner settings",
+        "security": [{ "Bearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "message": { "type": "string", "maxLength": 500 },
+                  "variant": { "$ref": "#/components/schemas/BannerVariant" },
+                  "isEnabled": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Returns the updated banner settings.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BannerSettingsDto" }
+              }
+            }
+          },
+          "400": { "description": "An enabled banner needs a message. / Invalid banner variant." },
+          "403": { "description": "Insufficient role." }
+        }
+      }
+    },
+    "/stats/public": {
+      "get": {
+        "tags": ["Stats"],
+        "summary": "Public statistics",
+        "responses": {
+          "200": {
+            "description": "Returns public stats.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "totalRequests": { "type": "integer", "format": "int64" },
+                    "totalImages": { "type": "integer", "format": "int32" },
+                    "totalTags": { "type": "integer", "format": "int32" },
+                    "totalArtists": { "type": "integer", "format": "int32" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/stats/admin": {
+      "get": {
+        "tags": ["Stats"],
+        "summary": "Admin statistics",
+        "security": [{ "Bearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Returns admin stats.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AdminStatsDto" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/storage-diff": {
+      "get": {
+        "tags": ["StorageDiff"],
+        "summary": "Compare S3 storage with the database (admin)",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "mode", "in": "query", "required": true, "schema": { "type": "string", "enum": ["OrphansInS3", "MissingFromS3"] } },
+          { "$ref": "#/components/parameters/Page" },
+          { "$ref": "#/components/parameters/PageSize" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the diff.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PaginatedStorageDiffDto" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/storage-diff/s3": {
+      "delete": {
+        "tags": ["StorageDiff"],
+        "summary": "Delete orphan files from S3 (admin)",
+        "security": [{ "Bearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "fileNames": { "type": "array", "items": { "type": "string" } }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "204": { "description": "Files deleted." } }
+      }
+    },
+    "/storage-diff/db": {
+      "delete": {
+        "tags": ["StorageDiff"],
+        "summary": "Delete missing-from-S3 images from the database (admin)",
+        "security": [{ "Bearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "imageIds": { "type": "array", "items": { "type": "integer", "format": "int64" } }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "204": { "description": "Images deleted." } }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "Page": { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+      "PageSize": { "name": "pageSize", "in": "query", "schema": { "type": "integer" } },
+      "IsNsfw": { "name": "isNsfw", "in": "query", "schema": { "type": "string", "enum": ["False", "True", "All"], "default": "False" } },
+      "IsAnimated": { "name": "isAnimated", "in": "query", "schema": { "type": "string", "enum": ["False", "True", "All"], "default": "All" } },
+      "OrderBy": { "name": "orderBy", "in": "query", "schema": { "type": "string", "enum": ["Random", "UploadedAt", "Favorites", "AddedToAlbum"], "default": "Random" } },
+      "Orientation": { "name": "orientation", "in": "query", "schema": { "type": "string", "enum": ["All", "Landscape", "Portrait", "Square"], "default": "All" } }
+    },
+    "schemas": {
+      "Role": { "type": "string", "enum": ["User", "TrustedUser", "Moderator", "Admin"] },
+      "ReviewStatus": { "type": "string", "enum": ["Pending", "Accepted"] },
+      "ReviewStatusFilter": { "type": "string", "enum": ["Pending", "Accepted", "All"], "default": "Accepted" },
+      "ReviewTaskStatus": { "type": "string", "enum": ["Pending", "Approved", "Rejected", "Cancelled"] },
+      "ReviewTaskKind": { "type": "string", "enum": ["NewContent", "Edit"] },
+      "ReviewableContentType": { "type": "string", "enum": ["Image", "Tag", "Artist"] },
+      "ReportStatus": { "type": "string", "enum": ["Pending", "Resolved", "Rejected", "Cancelled"] },
+      "BannerVariant": { "type": "string", "enum": ["Info", "Success", "Warning", "Danger"] },
+      "UserMinimalDto": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "name": { "type": "string" },
+          "avatarUrl": { "type": "string" }
+        }
+      },
+      "UserDto": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "name": { "type": "string" },
+          "discordId": { "type": "string" },
+          "avatarUrl": { "type": "string" },
+          "role": { "$ref": "#/components/schemas/Role" },
+          "isBlacklisted": { "type": "boolean" },
+          "blacklistReason": { "type": "string", "nullable": true },
+          "requestCount": { "type": "integer", "format": "int64" },
+          "apiKeyRequestCount": { "type": "integer", "format": "int64" },
+          "jwtRequestCount": { "type": "integer", "format": "int64" },
+          "uploadedImageCount": { "type": "integer", "format": "int64" },
+          "albumImageCount": { "type": "integer", "format": "int64" }
+        }
+      },
+      "ApiKeyDto": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "description": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "lastUsedAt": { "type": "string", "format": "date-time", "nullable": true },
+          "expirationDate": { "type": "string", "format": "date-time", "nullable": true },
+          "userId": { "type": "integer", "format": "int64" }
+        }
+      },
+      "CreatedApiKeyDto": {
+        "allOf": [
+          { "$ref": "#/components/schemas/ApiKeyDto" },
+          {
+            "type": "object",
+            "properties": {
+              "key": { "type": "string" }
+            }
+          }
+        ]
+      },
+      "TagDto": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "name": { "type": "string" },
+          "slug": { "type": "string" },
+          "description": { "type": "string" },
+          "reviewStatus": { "$ref": "#/components/schemas/ReviewStatus" },
+          "creatorId": { "type": "integer", "format": "int64", "nullable": true },
+          "imageCount": { "type": "integer", "format": "int64" }
+        }
+      },
+      "ArtistDto": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "name": { "type": "string" },
+          "patreon": { "type": "string" },
+          "pixiv": { "type": "string" },
+          "twitter": { "type": "string" },
+          "deviantArt": { "type": "string" },
+          "reviewStatus": { "$ref": "#/components/schemas/ReviewStatus" },
+          "creatorId": { "type": "integer", "format": "int64", "nullable": true },
+          "imageCount": { "type": "integer", "format": "int64" }
+        }
+      },
+      "ArtistEntity": {
+        "allOf": [
+          { "$ref": "#/components/schemas/ArtistDto" },
+          {
+            "type": "object",
+            "properties": {
+              "images": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/ImageDto" }
+              }
+            }
+          }
+        ]
+      },
+      "ImageAlbumRef": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "name": { "type": "string" },
+          "userId": { "type": "integer", "format": "int64" },
+          "isDefault": { "type": "boolean" }
+        }
+      },
+      "ImageDto": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "perceptualHash": { "type": "string" },
+          "extension": { "type": "string" },
+          "dominantColor": { "type": "string" },
+          "source": { "type": "string", "nullable": true },
+          "artists": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/ArtistDto" }
+          },
+          "uploaderId": { "type": "integer", "format": "int64", "nullable": true },
+          "uploadedAt": { "type": "string", "format": "date-time" },
+          "isNsfw": { "type": "boolean" },
+          "isAnimated": { "type": "boolean" },
+          "width": { "type": "integer", "format": "int64" },
+          "height": { "type": "integer", "format": "int64" },
+          "byteSize": { "type": "integer", "format": "int64" },
+          "url": { "type": "string" },
+          "tags": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/TagDto" }
+          },
+          "reviewStatus": { "$ref": "#/components/schemas/ReviewStatus" },
+          "favorites": { "type": "integer", "format": "int64" },
+          "likedAt": { "type": "string", "format": "date-time", "nullable": true },
+          "addedToAlbumAt": { "type": "string", "format": "date-time", "nullable": true },
+          "albums": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/ImageAlbumRef" }
+          }
+        }
+      },
+      "AlbumDto": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "isDefault": { "type": "boolean" },
+          "userId": { "type": "integer", "format": "int64" },
+          "imageCount": { "type": "integer", "format": "int64" }
+        }
+      },
+      "ReviewTaskDto": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "kind": { "$ref": "#/components/schemas/ReviewTaskKind" },
+          "submitterId": { "type": "integer", "format": "int64", "nullable": true },
+          "submitter": { "$ref": "#/components/schemas/UserMinimalDto" },
+          "targetType": { "$ref": "#/components/schemas/ReviewableContentType" },
+          "targetId": { "type": "integer", "format": "int64" },
+          "payload": { "type": "object", "nullable": true },
+          "target": { "type": "object", "nullable": true },
+          "reason": { "type": "string" },
+          "status": { "$ref": "#/components/schemas/ReviewTaskStatus" },
+          "reviewerId": { "type": "integer", "format": "int64", "nullable": true },
+          "reviewer": { "$ref": "#/components/schemas/UserMinimalDto" },
+          "reviewerNote": { "type": "string" },
+          "moderatorEditedAt": { "type": "string", "format": "date-time", "nullable": true },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "resolvedAt": { "type": "string", "format": "date-time", "nullable": true }
+        }
+      },
+      "ReportDto": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "userId": { "type": "integer", "format": "int64" },
+          "user": { "$ref": "#/components/schemas/UserMinimalDto" },
+          "imageId": { "type": "integer", "format": "int64", "nullable": true },
+          "image": { "$ref": "#/components/schemas/ImageDto" },
+          "description": { "type": "string" },
+          "status": { "$ref": "#/components/schemas/ReportStatus" },
+          "reviewerNote": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "BannerSettingsDto": {
+        "type": "object",
+        "properties": {
+          "message": { "type": "string" },
+          "variant": { "$ref": "#/components/schemas/BannerVariant" },
+          "isEnabled": { "type": "boolean" },
+          "updatedAt": { "type": "string", "format": "date-time", "nullable": true },
+          "updatedBy": { "$ref": "#/components/schemas/UserMinimalDto" }
+        }
+      },
+      "StorageDiffDto": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64", "nullable": true },
+          "fileName": { "type": "string" },
+          "image": { "$ref": "#/components/schemas/ImageDto" }
+        }
+      },
+      "AdminStatsDto": {
+        "type": "object",
+        "properties": {
+          "requestsToday": { "type": "integer", "format": "int32" },
+          "history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "date": { "type": "string" },
+                "count": { "type": "integer", "format": "int64" }
+              }
+            }
+          },
+          "topUsers": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/UserStatDto" }
+          },
+          "topApiKeyUsers": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/UserStatDto" }
+          },
+          "topJwtUsers": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/UserStatDto" }
+          },
+          "topUploaders": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "integer", "format": "int64" },
+                "name": { "type": "string" },
+                "uploadedImageCount": { "type": "integer", "format": "int64" }
+              }
+            }
+          },
+          "topAlbumUsers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "integer", "format": "int64" },
+                "name": { "type": "string" },
+                "albumImageCount": { "type": "integer", "format": "int64" }
+              }
+            }
+          },
+          "totalRequests": { "type": "integer", "format": "int64" },
+          "totalAuthenticatedRequests": { "type": "integer", "format": "int64" },
+          "totalUnauthenticatedRequests": { "type": "integer", "format": "int64" },
+          "totalApiKeyRequests": { "type": "integer", "format": "int64" },
+          "totalJwtRequests": { "type": "integer", "format": "int64" },
+          "totalImages": { "type": "integer", "format": "int64" },
+          "totalTags": { "type": "integer", "format": "int64" },
+          "totalArtists": { "type": "integer", "format": "int64" }
+        }
+      },
+      "UserStatDto": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "name": { "type": "string" },
+          "requestCount": { "type": "integer", "format": "int64" },
+          "apiKeyRequestCount": { "type": "integer", "format": "int64" },
+          "jwtRequestCount": { "type": "integer", "format": "int64" }
+        }
+      },
+      "PaginatedImageDto": { "$ref": "#/components/schemas/PaginatedList" },
+      "PaginatedTagDto": { "$ref": "#/components/schemas/PaginatedList" },
+      "PaginatedArtistDto": { "$ref": "#/components/schemas/PaginatedList" },
+      "PaginatedAlbumDto": { "$ref": "#/components/schemas/PaginatedList" },
+      "PaginatedUserDto": { "$ref": "#/components/schemas/PaginatedList" },
+      "PaginatedReportDto": { "$ref": "#/components/schemas/PaginatedList" },
+      "PaginatedReviewTaskDto": { "$ref": "#/components/schemas/PaginatedList" },
+      "PaginatedStorageDiffDto": { "$ref": "#/components/schemas/PaginatedList" },
+      "PaginatedList": {
+        "type": "object",
+        "properties": {
+          "items": { "type": "array", "items": {} },
+          "pageNumber": { "type": "integer" },
+          "totalPages": { "type": "integer" },
+          "totalCount": { "type": "integer", "format": "int64" },
+          "hasPreviousPage": { "type": "boolean" },
+          "hasNextPage": { "type": "boolean" },
+          "maxPageSize": { "type": "integer" },
+          "defaultPageSize": { "type": "integer" }
+        }
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string" },
+          "title": { "type": "string" },
+          "status": { "type": "integer" },
+          "detail": { "type": "string" },
+          "instance": { "type": "string" },
+          "traceId": { "type": "string" },
+          "errors": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "Bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT token for authenticated users"
+      },
+      "ApiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Api-Key",
+        "description": "API Key for programmatic access"
+      }
+    }
+  }
+}

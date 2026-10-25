@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useCallback, Dispatch, SetStateAction, useRef } from 'react';
+import { useState, useEffect, useCallback, Dispatch, SetStateAction, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import { PaginatedList } from '../types';
@@ -40,6 +40,10 @@ export function useResource<T extends { id: number | string }>(
     // Ref to prevent URL from overwriting local state immediately after a user action
     const ignoreUrlSync = useRef(false);
 
+    // Monotonic request sequence: responses belonging to an older request are
+    // dropped so a slow response can never overwrite newer results.
+    const requestSeq = useRef(0);
+
     // Wrapper for setSearch to handle the sync flag
     const setSearch = (value: string) => {
         if (value !== search) {
@@ -80,6 +84,7 @@ export function useResource<T extends { id: number | string }>(
             return;
         }
 
+        const seq = ++requestSeq.current;
         setLoading(true);
         try {
             const params: any = { page, pageSize, ...initialParams };
@@ -95,12 +100,16 @@ export function useResource<T extends { id: number | string }>(
             }
 
             const { data } = await api.get<PaginatedList<T>>(endpoint, { params });
+            if (seq !== requestSeq.current) return; // stale response - drop it
             setItems(data.items);
             setTotalPages(data.totalPages);
         } catch (error) {
             console.error(error);
         } finally {
-            setLoading(false);
+            // Only clear loading if this request is still the latest one.
+            if (seq === requestSeq.current) {
+                setLoading(false);
+            }
         }
     }, [endpoint, page, pageSize, debouncedSearch, searchType, JSON.stringify(initialParams)]);
 

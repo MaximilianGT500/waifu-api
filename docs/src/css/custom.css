@@ -20,13 +20,13 @@
 }
 
 [data-theme="dark"] {
-  --ifm-color-primary: #ffffff;
-  --ifm-color-primary-dark: #e6e6e6;
-  --ifm-color-primary-darker: #d9d9d9;
-  --ifm-color-primary-darkest: #b3b3b3;
-  --ifm-color-primary-light: #ffffff;
-  --ifm-color-primary-lighter: #ffffff;
-  --ifm-color-primary-lightest: #ffffff;
+  --ifm-color-primary: #7983f5;
+  --ifm-color-primary-dark: #5865f2;
+  --ifm-color-primary-darker: #4752c4;
+  --ifm-color-primary-darkest: #3c45a5;
+  --ifm-color-primary-light: #9ba3f7;
+  --ifm-color-primary-lighter: #b7bdfa;
+  --ifm-color-primary-lightest: #d4d8fc;
   --ifm-background-color: #121212;
   --ifm-navbar-background-color: #252525;
   --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.1);
@@ -291,6 +291,73 @@
   align-items: center;
   justify-content: center;
   gap: 0.75rem;
+}
+
+/* ── API Reference: request explorer ──────────────────────── */
+/* The default button uses --ifm-color-primary-light, which is white in dark
+   mode -> white-on-white. Force a solid accent in both themes. */
+
+.openapi-explorer__request-btn {
+  background-color: #5865f2;
+  border: 1px solid #5865f2;
+  color: #ffffff;
+  border-radius: 8px;
+  letter-spacing: 0.03em;
+}
+
+.openapi-explorer__request-btn:hover {
+  background-color: #4752c4;
+  border-color: #4752c4;
+  color: #ffffff;
+}
+
+.openapi-explorer__request-btn:active {
+  background-color: #3c45a5;
+  border-color: #3c45a5;
+}
+
+.openapi-explorer__request-btn:focus-visible {
+  outline: 2px solid #9ba3f7;
+  outline-offset: 2px;
+}
+
+.openapi-explorer__form-item-label {
+  font-weight: 600;
+}
+
+.openapi-explorer__form-item-input,
+.openapi-explorer__select-input,
+.openapi-explorer__multi-select-input {
+  border-radius: 6px;
+}
+
+[data-theme="dark"] .openapi-explorer__form-item-input,
+[data-theme="dark"] .openapi-explorer__select-input,
+[data-theme="dark"] .openapi-explorer__multi-select-input {
+  background-color: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.15);
+  color: #e6e6e6;
+}
+
+.openapi-explorer__floating-btn {
+  background-color: #5865f2;
+  border-color: #5865f2;
+  color: #ffffff;
+}
+
+.openapi-explorer__floating-btn:hover {
+  background-color: #4752c4;
+  border-color: #4752c4;
+  color: #ffffff;
+}
+
+.openapi-explorer__details-container,
+.openapi-explorer__response-container {
+  border-radius: 8px;
+}
+
+.openapi-explorer__response-placeholder-message {
+  font-size: 0.95rem;
 }
 
 /* ── Responsive ───────────────────────────────────────────── */

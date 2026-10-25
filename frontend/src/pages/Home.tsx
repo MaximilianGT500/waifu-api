@@ -1,8 +1,8 @@
-﻿import { Link } from 'react-router-dom';
-import { ArrowRight, Book, Wifi, WifiOff, Image as ImageIcon, Tag as TagIcon, Users, Activity } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { ArrowRight, Book, Wifi, WifiOff, Image as ImageIcon, Tag as TagIcon, Users, Activity, Shuffle } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import api from '../services/api';
-import { ImageDto, PaginatedList, NsfwMode, Orientation, AnimatedMode } from '../types';
+import { ImageDto, PaginatedList, NsfwMode, Orientation, AnimatedMode, ImageOrderBy } from '../types';
 import { getEnv } from '../utils/env';
 import Skeleton from '../components/Skeleton';
 import { MetaTags } from '../hooks/useMetaTags';
@@ -23,14 +23,34 @@ function formatCompactNumber(n: number): string {
 }
 
 const Home = () => {
+    const navigate = useNavigate();
     const [heroImage, setHeroImage] = useState<ImageDto | null>(null);
     const [imageLoaded, setImageLoaded] = useState(false);
     const [isApiOnline, setIsApiOnline] = useState<boolean>(false);
     const [isLoading, setIsLoading] = useState<boolean>(true);
     const [stats, setStats] = useState<PublicStats | null>(null);
     const [loadingStats, setLoadingStats] = useState<boolean>(true);
+    const [isSurprising, setIsSurprising] = useState<boolean>(false);
 
     const docsUrl = getEnv('VITE_DOCS_URL');
+
+    const surpriseMe = async () => {
+        if (isSurprising) return;
+        setIsSurprising(true);
+        try {
+            const { data } = await api.get<PaginatedList<ImageDto>>('/images', {
+                params: { isNsfw: NsfwMode.False, pageSize: 1, orderBy: ImageOrderBy.Random },
+                skipGlobalErrorHandler: true,
+            });
+            if (data.items.length > 0) {
+                navigate(`/images/${data.items[0].id}`);
+            }
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setIsSurprising(false);
+        }
+    };
 
     useEffect(() => {
         const fetchHero = async () => {
@@ -168,6 +188,14 @@ const Home = () => {
                     >
                         Start Browsing <ArrowRight size={20} />
                     </Link>
+
+                    <button
+                        onClick={surpriseMe}
+                        disabled={isSurprising}
+                        className="w-full sm:w-auto px-8 py-4 rounded-xl bg-primary text-primary-foreground font-bold text-lg hover:bg-primary/90 transition-all flex items-center justify-center gap-2 shadow-lg shadow-primary/20 hover:-translate-y-1 disabled:opacity-60 disabled:hover:translate-y-0"
+                    >
+                        <Shuffle size={20} className={isSurprising ? 'animate-spin' : ''} /> Surprise Me
+                    </button>
 
                     {docsUrl && (
                         <a

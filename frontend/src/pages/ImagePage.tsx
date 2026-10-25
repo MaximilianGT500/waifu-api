@@ -1,9 +1,9 @@
-﻿import { useState, useEffect} from 'react';
+import { useState, useEffect} from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import api from '../services/api';
 import { ImageDto, Role, ImageFormData, ReviewStatus, ReviewStatusFilter, ReviewableContentType } from '../types';
-import { Heart, Trash2, Edit, FolderPlus, Flag, Image, GitPullRequest, Clock, Plus } from 'lucide-react';
+import { Heart, Trash2, Edit, FolderPlus, Flag, Image, GitPullRequest, Clock, Plus, Download, Link2, Check } from 'lucide-react';
 import { useMyPendingImageEdits } from '../hooks/useMyPendingImageEdits';
 import { invalidateNavBadges } from '../hooks/useNavBadges';
 import { useAuth } from '../context/AuthContext';
@@ -44,8 +44,44 @@ const ImagePage = () => {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [isAlbumModalOpen, setIsAlbumModalOpen] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const isAdminOrModerator = user && (user.role === Role.Admin || user.role === Role.Moderator);
+
+  const handleCopyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setLinkCopied(true);
+      showNotification('success', 'Link copied to clipboard');
+      setTimeout(() => setLinkCopied(false), 2000);
+    } catch {
+      showNotification('error', 'Could not copy the link');
+    }
+  };
+
+  const handleDownload = async () => {
+    if (!image || isDownloading) return;
+    setIsDownloading(true);
+    try {
+      const res = await fetch(image.url, { mode: 'cors' });
+      if (!res.ok) throw new Error('download failed');
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = `${image.id}${image.extension || '.png'}`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+      showNotification('success', 'Download started');
+    } catch {
+      window.open(image.url, '_blank', 'noopener,noreferrer');
+    } finally {
+      setIsDownloading(false);
+    }
+  };
 
   // Function to fetch image (can be called silently to refresh data)
   const fetchImage = async (silent = false) => {
@@ -210,6 +246,27 @@ const ImagePage = () => {
               >
                 <Heart size={18} className={image.likedAt ? "text-red-500 fill-current" : ""} />
                 <span>{image.favorites}</span>
+              </button>
+
+              {/* Download Button */}
+              <button
+                  onClick={handleDownload}
+                  disabled={isDownloading}
+                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-secondary hover:bg-secondary/80 text-secondary-foreground transition-colors font-medium text-sm disabled:opacity-60"
+                  title="Download the original image"
+              >
+                  <Download size={18} className={isDownloading ? "animate-pulse" : ""} />
+                  <span className="hidden sm:inline">Download</span>
+              </button>
+
+              {/* Copy Link Button */}
+              <button
+                  onClick={handleCopyLink}
+                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-secondary hover:bg-secondary/80 text-secondary-foreground transition-colors font-medium text-sm"
+                  title="Copy link to this image"
+              >
+                  {linkCopied ? <Check size={18} className="text-green-500" /> : <Link2 size={18} />}
+                  <span className="hidden sm:inline">{linkCopied ? 'Copied' : 'Copy Link'}</span>
               </button>
 
               {/* Album Button */}

@@ -1,4 +1,4 @@
-﻿import { useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import { getEnv } from '../utils/env';
 
 const Login = () => {
@@ -17,9 +17,15 @@ const Login = () => {
             return;
         }
 
+        // OAuth state nonce (login-CSRF protection). The callback validates it.
+        const state = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+            ? crypto.randomUUID()
+            : Math.random().toString(36).slice(2) + Date.now().toString(36);
+        sessionStorage.setItem('oauth_state', state);
+
         const encodedRedirectUri = encodeURIComponent(redirectUri);
         const scope = encodeURIComponent('identify');
-        const url = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&redirect_uri=${encodedRedirectUri}&response_type=code&scope=${scope}`;
+        const url = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&redirect_uri=${encodedRedirectUri}&response_type=code&scope=${scope}&state=${state}`;
         window.location.href = url;
     };
 

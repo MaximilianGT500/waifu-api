@@ -1,4 +1,4 @@
-﻿# IDEs
+# IDEs
 .vs
 .idea
 
@@ -9,8 +9,18 @@
 #LLM
 .claude
 
+# Local database volume (docker compose)
+postgres_data/
+
 # Docs
 docs/node_modules
 docs/build
 docs/.docusaurus
 docs/docs/api
+
+# Frontend
+frontend/node_modules
+frontend/dist
+
+# Go
+backend/go.sum
