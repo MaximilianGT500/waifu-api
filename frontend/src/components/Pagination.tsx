@@ -32,6 +32,8 @@ const Pagination = ({ currentPage, totalPages, setPage, pageSize, setPageSize, s
         if (target) {
             target.scrollIntoView({ behavior: 'instant' as ScrollBehavior });
         } else {
+            const scroller = document.querySelector('main') ?? document.scrollingElement;
+            scroller?.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
             window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
         }
     };

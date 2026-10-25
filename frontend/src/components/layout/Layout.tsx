@@ -75,126 +75,9 @@ const Layout = () => {
     const { canManageBanner } = usePermissions();
 
     return (
-        <div className="min-h-screen bg-background text-foreground flex flex-col">
+        <div className="h-screen bg-background text-foreground flex flex-col overflow-hidden">
             <GlobalErrorHandler />
 
-            {/* 1. TOP NAVBAR */}
-            <header className="sticky top-0 z-50 w-full h-16 border-b border-border/80 bg-card/95 supports-[backdrop-filter]:bg-card/80 backdrop-blur flex items-center justify-between px-4 lg:px-6 shadow-sm">
-                <div className="flex items-center gap-4">
-                    <button
-                        aria-label="Open navigation menu"
-                        aria-expanded={isMobileMenuOpen}
-                        className="lg:hidden p-2 rounded-md hover:bg-secondary"
-                        onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-                    >
-                        <Menu size={24} />
-                    </button>
-
-                    <Link to="/" aria-label={`${appTitle} home`} className="flex items-center gap-2.5 sm:gap-3 group">
-                        <img
-                            src="/logo.png?v=20261024-logo-v2"
-                            alt={`${appTitle} logo`}
-                            width={44}
-                            height={44}
-                            className="w-11 h-11 sm:w-12 sm:h-12 shrink-0 rounded-xl object-cover ring-1 ring-border shadow-sm motion-safe:group-hover:scale-105 motion-safe:transition-transform"
-                        />
-                        <span className="text-xl font-bold tracking-tight hidden sm:block">{appTitle}</span>
-                    </Link>
-                </div>
-
-                <div className="flex items-center gap-2 sm:gap-4">
-                    {/* Theme Toggle Dropdown */}
-                    <Dropdown
-                        width="w-36"
-                        trigger={
-                            <button className="p-2.5 rounded-full hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
-                                {resolvedTheme === 'light' ? <Sun size={20} /> : <Moon size={20} />}
-                            </button>
-                        }
-                    >
-                        <DropdownItem onClick={() => setTheme('light')} active={theme === 'light'} icon={<Sun size={16} />}>Light</DropdownItem>
-                        <DropdownItem onClick={() => setTheme('dark')} active={theme === 'dark'} icon={<Moon size={16} />}>Dark</DropdownItem>
-                        <DropdownItem onClick={() => setTheme('system')} active={theme === 'system'} icon={<Monitor size={16} />}>System</DropdownItem>
-                    </Dropdown>
-
-                    {user ? (
-                        <Dropdown
-                            width="w-64"
-                            padding="p-0"
-                            trigger={
-                                <button className="flex items-center gap-3 pl-2 pr-3 py-1.5 rounded-full hover:bg-secondary transition-colors border border-transparent hover:border-border max-w-[200px]">
-                                    {user.avatarUrl ? (
-                                        <img src={user.avatarUrl} alt={user.name} className="w-8 h-8 shrink-0 rounded-full object-cover border border-primary/20" />
-                                    ) : (
-                                        <div className="w-8 h-8 shrink-0 rounded-full bg-primary/10 flex items-center justify-center text-primary border border-primary/20">
-                                            <UserIcon size={16} />
-                                        </div>
-                                    )}
-                                    <div className="text-right hidden md:block overflow-hidden">
-                                        <p className="text-xs font-bold leading-none truncate max-w-[100px]">{user.name}</p>
-                                        <p className="text-[10px] text-muted-foreground mt-0.5 uppercase tracking-wide font-semibold">
-                                            {user.role === Role.Admin ? 'Admin' : user.role === Role.Moderator ? 'Mod' : 'User'}
-                                        </p>
-                                    </div>
-                                    <ChevronDown size={14} className="text-muted-foreground shrink-0" />
-                                </button>
-                            }
-                        >
-                            {/* Header Mobile */}
-                            <div className="px-4 py-3 border-b border-border md:hidden bg-secondary/30">
-                                <p className="font-bold truncate">{user.name}</p>
-                                <p className="text-xs text-muted-foreground">{user.role === Role.Admin ? 'Administrator' : 'Member'}</p>
-                            </div>
-
-                            <div className="p-1">
-                                <DropdownLabel>Personal</DropdownLabel>
-                                <Link to="/upload"><DropdownItem icon={<UploadIcon size={16} />}>Upload Image</DropdownItem></Link>
-                                <Link to="/albums"><DropdownItem icon={<Library size={16} />}>My Albums</DropdownItem></Link>
-                                <Link to="/api-keys"><DropdownItem icon={<Key size={16} />}>API Keys</DropdownItem></Link>
-                                {!isModOrAdmin && (
-                                    <>
-                                        <Link to="/review"><DropdownItem icon={<GitPullRequest size={16} />}>My Submissions{navBadge}</DropdownItem></Link>
-                                        <Link to="/my-reports"><DropdownItem icon={<Flag size={16} />}>My Reports</DropdownItem></Link>
-                                    </>
-                                )}
-
-                                {(isModOrAdmin || canManageBanner) && (
-                                    <>
-                                        <DropdownSeparator />
-                                        <DropdownLabel>Administration</DropdownLabel>
-                                        {canManageBanner && (
-                                            <Link to="/site-banner"><DropdownItem icon={<Megaphone size={16} className="text-primary" />}>Site Banner</DropdownItem></Link>
-                                        )}
-                                        {isModOrAdmin && (
-                                            <>
-                                                <Link to="/review"><DropdownItem icon={<GitPullRequest size={16} className="text-orange-500" />}>Review{navBadge}</DropdownItem></Link>
-                                                <Link to="/reports"><DropdownItem icon={<Flag size={16} className="text-red-500" />}>Reports{reportBadge}</DropdownItem></Link>
-                                            </>
-                                        )}
-                                        {isAdmin && (
-                                            <>
-                                                <Link to="/users"><DropdownItem icon={<UsersIcon size={16} className="text-blue-500" />}>User Management</DropdownItem></Link>
-                                                <Link to="/stats"><DropdownItem icon={<BarChart size={16} className="text-purple-500" />}>Statistics</DropdownItem></Link>
-                                                <Link to="/storage-diff"><DropdownItem icon={<HardDrive size={16} className="text-emerald-500" />}>Storage Diff</DropdownItem></Link>
-                                            </>
-                                        )}
-                                    </>
-                                )}
-
-                                <DropdownSeparator />
-                                <DropdownItem onClick={handleLogout} icon={<LogOut size={16} />} danger>Log out</DropdownItem>
-                            </div>
-                        </Dropdown>
-                    ) : (
-                        <Link
-                            to="/login"
-                            className="px-5 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-bold hover:opacity-90 transition-all shadow-sm"
-                        >
-                            Login
-                        </Link>
-                    )}
-                </div>
-            </header>
 
             {/* 2. MAIN LAYOUT */}
             <div className="flex flex-1 min-h-0 overflow-hidden relative">
@@ -504,6 +387,122 @@ const Layout = () => {
 
                 {/* CONTENT AREA */}
                 <main className="flex-1 overflow-x-hidden overflow-y-auto bg-muted/20 relative">
+                <header className="w-full h-16 border-b border-border/80 bg-card/95 supports-[backdrop-filter]:bg-card/80 backdrop-blur flex items-center justify-between px-4 lg:px-6 shadow-sm">
+                                <div className="flex items-center gap-4">
+                                    <button
+                                        aria-label="Open navigation menu"
+                                        aria-expanded={isMobileMenuOpen}
+                                        className="lg:hidden p-2 rounded-md hover:bg-secondary"
+                                        onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+                                    >
+                                        <Menu size={24} />
+                                    </button>
+
+                                    <Link to="/" aria-label={`${appTitle} home`} className="flex items-center gap-2.5 sm:gap-3 group">
+                                        <img
+                                            src="/logo.png?v=20261024-logo-v2"
+                                            alt={`${appTitle} logo`}
+                                            width={44}
+                                            height={44}
+                                            className="w-11 h-11 sm:w-12 sm:h-12 shrink-0 rounded-xl object-cover ring-1 ring-border shadow-sm motion-safe:group-hover:scale-105 motion-safe:transition-transform"
+                                        />
+                                        <span className="text-xl font-bold tracking-tight hidden sm:block">{appTitle}</span>
+                                    </Link>
+                                </div>
+
+                                <div className="flex items-center gap-2 sm:gap-4">
+                                    {/* Theme Toggle Dropdown */}
+                                    <Dropdown
+                                        width="w-36"
+                                        trigger={
+                                            <button className="p-2.5 rounded-full hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
+                                                {resolvedTheme === 'light' ? <Sun size={20} /> : <Moon size={20} />}
+                                            </button>
+                                        }
+                                    >
+                                        <DropdownItem onClick={() => setTheme('light')} active={theme === 'light'} icon={<Sun size={16} />}>Light</DropdownItem>
+                                        <DropdownItem onClick={() => setTheme('dark')} active={theme === 'dark'} icon={<Moon size={16} />}>Dark</DropdownItem>
+                                        <DropdownItem onClick={() => setTheme('system')} active={theme === 'system'} icon={<Monitor size={16} />}>System</DropdownItem>
+                                    </Dropdown>
+
+                                    {user ? (
+                                        <Dropdown
+                                            width="w-64"
+                                            padding="p-0"
+                                            trigger={
+                                                <button className="flex items-center gap-3 pl-2 pr-3 py-1.5 rounded-full hover:bg-secondary transition-colors border border-transparent hover:border-border max-w-[200px]">
+                                                    {user.avatarUrl ? (
+                                                        <img src={user.avatarUrl} alt={user.name} className="w-8 h-8 shrink-0 rounded-full object-cover border border-primary/20" />
+                                                    ) : (
+                                                        <div className="w-8 h-8 shrink-0 rounded-full bg-primary/10 flex items-center justify-center text-primary border border-primary/20">
+                                                            <UserIcon size={16} />
+                                                        </div>
+                                                    )}
+                                                    <div className="text-right hidden md:block overflow-hidden">
+                                                        <p className="text-xs font-bold leading-none truncate max-w-[100px]">{user.name}</p>
+                                                        <p className="text-[10px] text-muted-foreground mt-0.5 uppercase tracking-wide font-semibold">
+                                                            {user.role === Role.Admin ? 'Admin' : user.role === Role.Moderator ? 'Mod' : 'User'}
+                                                        </p>
+                                                    </div>
+                                                    <ChevronDown size={14} className="text-muted-foreground shrink-0" />
+                                                </button>
+                                            }
+                                        >
+                                            {/* Header Mobile */}
+                                            <div className="px-4 py-3 border-b border-border md:hidden bg-secondary/30">
+                                                <p className="font-bold truncate">{user.name}</p>
+                                                <p className="text-xs text-muted-foreground">{user.role === Role.Admin ? 'Administrator' : 'Member'}</p>
+                                            </div>
+
+                                            <div className="p-1">
+                                                <DropdownLabel>Personal</DropdownLabel>
+                                                <Link to="/upload"><DropdownItem icon={<UploadIcon size={16} />}>Upload Image</DropdownItem></Link>
+                                                <Link to="/albums"><DropdownItem icon={<Library size={16} />}>My Albums</DropdownItem></Link>
+                                                <Link to="/api-keys"><DropdownItem icon={<Key size={16} />}>API Keys</DropdownItem></Link>
+                                                {!isModOrAdmin && (
+                                                    <>
+                                                        <Link to="/review"><DropdownItem icon={<GitPullRequest size={16} />}>My Submissions{navBadge}</DropdownItem></Link>
+                                                        <Link to="/my-reports"><DropdownItem icon={<Flag size={16} />}>My Reports</DropdownItem></Link>
+                                                    </>
+                                                )}
+
+                                                {(isModOrAdmin || canManageBanner) && (
+                                                    <>
+                                                        <DropdownSeparator />
+                                                        <DropdownLabel>Administration</DropdownLabel>
+                                                        {canManageBanner && (
+                                                            <Link to="/site-banner"><DropdownItem icon={<Megaphone size={16} className="text-primary" />}>Site Banner</DropdownItem></Link>
+                                                        )}
+                                                        {isModOrAdmin && (
+                                                            <>
+                                                                <Link to="/review"><DropdownItem icon={<GitPullRequest size={16} className="text-orange-500" />}>Review{navBadge}</DropdownItem></Link>
+                                                                <Link to="/reports"><DropdownItem icon={<Flag size={16} className="text-red-500" />}>Reports{reportBadge}</DropdownItem></Link>
+                                                            </>
+                                                        )}
+                                                        {isAdmin && (
+                                                            <>
+                                                                <Link to="/users"><DropdownItem icon={<UsersIcon size={16} className="text-blue-500" />}>User Management</DropdownItem></Link>
+                                                                <Link to="/stats"><DropdownItem icon={<BarChart size={16} className="text-purple-500" />}>Statistics</DropdownItem></Link>
+                                                                <Link to="/storage-diff"><DropdownItem icon={<HardDrive size={16} className="text-emerald-500" />}>Storage Diff</DropdownItem></Link>
+                                                            </>
+                                                        )}
+                                                    </>
+                                                )}
+
+                                                <DropdownSeparator />
+                                                <DropdownItem onClick={handleLogout} icon={<LogOut size={16} />} danger>Log out</DropdownItem>
+                                            </div>
+                                        </Dropdown>
+                                    ) : (
+                                        <Link
+                                            to="/login"
+                                            className="px-5 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-bold hover:opacity-90 transition-all shadow-sm"
+                                        >
+                                            Login
+                                        </Link>
+                                    )}
+                                </div>
+                            </header>
                     <SiteBanner />
                     <Outlet />
                 </main>
