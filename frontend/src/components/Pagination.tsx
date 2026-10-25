@@ -5,13 +5,12 @@ interface PaginationProps {
     currentPage: number;
     totalPages: number;
     setPage: (page: number) => void;
-    disabled?: boolean;
     pageSize?: number;
     setPageSize?: (size: number) => void;
     scrollTargetId?: string;
 }
 
-const Pagination = ({ currentPage, totalPages, setPage, disabled = false, pageSize, setPageSize, scrollTargetId }: PaginationProps) => {
+const Pagination = ({ currentPage, totalPages, setPage, pageSize, setPageSize, scrollTargetId }: PaginationProps) => {
     const [inputVal, setInputVal] = useState(currentPage.toString());
     const [pageSizeInput, setPageSizeInput] = useState(pageSize?.toString() ?? '');
 
@@ -39,14 +38,6 @@ const Pagination = ({ currentPage, totalPages, setPage, disabled = false, pageSi
 
     // Hide if only 1 page and no page size selector
     if (totalPages <= 1 && !setPageSize) return null;
-
-    if (disabled) {
-        return (
-            <div className="flex justify-center py-6 text-muted-foreground text-sm italic">
-                Pagination disabled
-            </div>
-        );
-    }
 
     const handleFirst = () => changePage(1);
     const handlePrev = () => changePage(Math.max(1, currentPage - 1));

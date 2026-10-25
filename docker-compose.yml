@@ -47,6 +47,8 @@ services:
       VITE_IMG_WIDTH_PARAM: "${IMG_WIDTH_PARAM:-width}"
       VITE_IMG_CARD_WIDTH: "${IMG_CARD_WIDTH:-640}"
       VITE_IMG_PREVIEW_WIDTH: "${IMG_PREVIEW_WIDTH:-1280}"
+      # Version shown in the UI (sidebar); set VERSION in .env or via tag.
+      VITE_APP_VERSION: "${VERSION:-0.0.0}"
     ports:
       - "${FRONTEND_PORT}:80"
     depends_on:

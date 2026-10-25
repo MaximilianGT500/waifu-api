@@ -44,14 +44,17 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	allowed := s.cfg.AllowedOrigins
+	allowAll := s.cfg.CORSAllowAll
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 		if origin != "" {
-			ok := false
-			for _, o := range allowed {
-				if strings.EqualFold(o, origin) {
-					ok = true
-					break
+			ok := allowAll
+			if !ok {
+				for _, o := range allowed {
+					if strings.EqualFold(o, origin) {
+						ok = true
+						break
+					}
 				}
 			}
 			if ok {

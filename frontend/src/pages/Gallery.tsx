@@ -11,7 +11,7 @@ import { MetaTags } from '../hooks/useMetaTags';
 import { isBot } from '../utils/bot';
 
 const Gallery = () => {
-    const { filters, page, setPage, searchParams, setSearchParams, isNsfw } = useGalleryParams();
+    const { filters, page, setPage, pageSize, setPageSize, searchParams, setSearchParams, isNsfw } = useGalleryParams();
     const { showWarning: showNsfwWarning, setShowWarning: setShowNsfwWarning, grantConsent, hasConsent } = useNsfwConsent(false);
 
     const { data: paginatedImages, isLoading, error, refetch } = useImages(filters);
@@ -51,6 +51,8 @@ const Gallery = () => {
                 page={page}
                 totalPages={paginatedImages?.totalPages || 1}
                 setPage={setPage}
+                pageSize={pageSize}
+                setPageSize={setPageSize}
                 searchParams={searchParams}
                 setSearchParams={setSearchParams}
                 emptyState={

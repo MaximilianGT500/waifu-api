@@ -25,6 +25,8 @@ interface GalleryLayoutProps {
     page: number;
     totalPages: number;
     setPage: (page: number) => void;
+    pageSize?: number;
+    setPageSize?: (size: number) => void;
     searchParams: URLSearchParams;
     setSearchParams: (params: URLSearchParams | ((prev: URLSearchParams) => URLSearchParams)) => void;
     headerContent?: ReactNode;
@@ -42,6 +44,8 @@ export const GalleryLayout = ({
                                   page,
                                   totalPages,
                                   setPage,
+                                  pageSize,
+                                  setPageSize,
                                   searchParams,
                                   setSearchParams,
                                   headerContent,
@@ -124,8 +128,6 @@ export const GalleryLayout = ({
         { id: ImageOrderBy.Favorites, name: 'Most Popular' }
     ];
 
-    const currentSort = searchParams.get('orderBy');
-
     return (
         <div className="flex h-full relative overflow-hidden">
             <div className="flex-1 flex flex-col relative min-w-0 overflow-hidden">
@@ -190,7 +192,8 @@ export const GalleryLayout = ({
                         currentPage={page}
                         totalPages={totalPages}
                         setPage={setPage}
-                        disabled={currentSort === ImageOrderBy.Random}
+                        pageSize={pageSize}
+                        setPageSize={setPageSize}
                     />
                 </div>
             </div>

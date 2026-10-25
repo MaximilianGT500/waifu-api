@@ -51,7 +51,7 @@ error formats, review semantics and even the quirks of the old API are reproduce
 - 📊 **Statistics** – public counters plus an admin dashboard (requests, top users, top uploaders, history).
 - ⚡ **Performance** – CDN integration with on-the-fly image resizing and single-image cache purging.
 - 🔐 **Security** – hashed API keys, OAuth state nonce, blacklist middleware, per-IP rate limiting,
-  CORS allowlist, security headers.
+  configurable CORS (allowlist, optionally fully open), security headers.
 
 ## 🏗️ Architecture
 
@@ -183,7 +183,8 @@ available for browsing (images, tags, artists, public stats, banner).
 ## 🔐 Security
 
 - Per-IP rate limiting (`RATE_LIMIT_REQUESTS_PER_MINUTE` / `RATE_LIMIT_BURST`).
-- CORS restricted to `FRONTEND_URL` (+ `CORS_EXTRA_ORIGINS`).
+- CORS restricted to `FRONTEND_URL` (+ `CORS_EXTRA_ORIGINS`); set `CORS_ALLOW_ALL=true`
+  to open it completely so any origin can call the API.
 - API keys stored as SHA-256 hashes; shown only once at creation.
 - JWT with issuer/audience validation; OAuth state nonce for the Discord login.
 - Blacklisted users are rejected on every request; security headers on all responses.
@@ -205,7 +206,8 @@ The Go backend reproduces the .NET API exactly, including its historical quirks:
 Deliberate differences (documented in [`.env.example`](.env.example)):
 
 - **Rate limiting** (per-IP token bucket, configurable) – the .NET backend had none.
-- **CORS allowlist** instead of `AllowAnyOrigin`.
+- **CORS allowlist** (configurable; `CORS_ALLOW_ALL=true` opens it completely) instead
+  of `AllowAnyOrigin`.
 - Additional endpoints: `GET /healthz` (container health check) and static `/openapi/v1.json` + `/scalar`.
 
 ## 🧪 Development

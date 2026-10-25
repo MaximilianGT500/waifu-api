@@ -51,6 +51,7 @@ type Config struct {
 	StatusURL      string
 	DocsURL        string
 	AllowedOrigins []string
+	CORSAllowAll   bool
 }
 
 type S3Config struct {
@@ -274,6 +275,7 @@ func Load(envPath string) (*Config, error) {
 		origins = append(origins, "http://localhost:5173", "http://127.0.0.1:5173")
 	}
 	c.AllowedOrigins = origins
+	c.CORSAllowAll = boolEnv("CORS_ALLOW_ALL", false)
 
 	return c, c.Validate()
 }

@@ -24,6 +24,11 @@ export const useGalleryParams = (defaultSort = ImageOrderBy.Random) => {
     const pageStr = searchParams.get('page');
     const page = pageStr ? parseInt(pageStr) : 1;
 
+    const pageSizeStr = searchParams.get('pageSize');
+    let pageSize = pageSizeStr ? parseInt(pageSizeStr) : 30;
+    if (isNaN(pageSize) || pageSize < 1) pageSize = 30;
+    if (pageSize > 100) pageSize = 100;
+
     const prevFiltersRef = useRef(JSON.stringify({ isNsfw, orderBy, orientation, isAnimated, height, width, byteSize, includedTags, excludedTags, includedArtists, excludedArtists, includedIds, excludedIds, uploaderId, reviewStatus }));
 
     useEffect(() => {
@@ -40,6 +45,12 @@ export const useGalleryParams = (defaultSort = ImageOrderBy.Random) => {
 
     const setPage = (newPage: number) => setSearchParams(prev => { prev.set('page', newPage.toString()); return prev; });
 
+    const setPageSize = (newSize: number) => setSearchParams(prev => {
+        prev.set('pageSize', newSize.toString());
+        prev.set('page', '1');
+        return prev;
+    });
+
     const filters = {
         isNsfw,
         orderBy,
@@ -49,13 +60,15 @@ export const useGalleryParams = (defaultSort = ImageOrderBy.Random) => {
         includedTags, excludedTags, includedArtists, excludedArtists, includedIds, excludedIds,
         uploaderId: uploaderId || undefined,
         reviewStatus: reviewStatus !== ReviewStatusFilter.Accepted ? reviewStatus : undefined,
-        page, pageSize: 30
+        page, pageSize
     };
 
     return {
         filters,
         page,
         setPage,
+        pageSize,
+        setPageSize,
         searchParams,
         setSearchParams,
         isNsfw

@@ -58,6 +58,7 @@ const Layout = () => {
     const statusUrl = getEnv('VITE_STATUS_URL');
     const githubUrl = getEnv('VITE_GITHUB_URL');
     const tosUrl = getEnv('VITE_TOS_URL');
+    const appVersion = getEnv('VITE_APP_VERSION');
     const showContact = !!contactEmail || !!discordServerUrl;
 
     const navItems = [
@@ -355,6 +356,11 @@ const Layout = () => {
                     </nav>
 
                     <div className="p-4 border-t border-border mt-auto">
+                        {appVersion && (
+                            <p className="text-center text-[11px] font-medium text-muted-foreground/60 mb-2 select-none">
+                                {isSidebarCollapsed ? `v${appVersion}` : `Version ${appVersion}`}
+                            </p>
+                        )}
                         <button
                             aria-label={isSidebarCollapsed ? 'Expand navigation menu' : 'Collapse navigation menu'}
                             onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}

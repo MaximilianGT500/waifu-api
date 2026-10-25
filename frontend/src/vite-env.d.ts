@@ -1,4 +1,4 @@
-﻿/// <reference types="vite/client" />
+/// <reference types="vite/client" />
 
 interface Window {
   env: {
@@ -17,6 +17,7 @@ interface Window {
     VITE_IMG_WIDTH_PARAM?: string;
     VITE_IMG_CARD_WIDTH?: string;
     VITE_IMG_PREVIEW_WIDTH?: string;
+    VITE_APP_VERSION?: string;
   }
 }
 
@@ -36,6 +37,7 @@ interface ImportMetaEnv {
   readonly VITE_IMG_WIDTH_PARAM?: string
   readonly VITE_IMG_CARD_WIDTH?: string
   readonly VITE_IMG_PREVIEW_WIDTH?: string
+  readonly VITE_APP_VERSION?: string
 }
 
 interface ImportMeta {
