@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"math"
 	"net/http"
 	"strconv"
@@ -18,22 +19,44 @@ type paginated struct {
 	DefaultPageSize int   `json:"defaultPageSize"`
 }
 
-func paginationParams(r *http.Request, defPageSize, maxPageSize int) (page, pageSize int) {
-	page = parseInt(r.URL.Query().Get("page"), 1)
+const maxOffset = 10_000_000
+
+func (s *Server) effectiveMaxPageSize(configured int) int {
+	hard := s.cfg.Limits.MaxPageSize
+	if configured <= 0 || configured > hard {
+		return hard
+	}
+	return configured
+}
+
+func (s *Server) paginationParams(r *http.Request, defPageSize, maxPageSize int) (page, pageSize int) {
+	max := s.effectiveMaxPageSize(maxPageSize)
+	if defPageSize <= 0 {
+		defPageSize = 30
+	}
+	if defPageSize > max {
+		defPageSize = max
+	}
+	page = parseInt(queryGet(r, "page"), 1)
 	if page < 1 {
 		page = 1
 	}
-	pageSize = parseInt(r.URL.Query().Get("pageSize"), defPageSize)
+	pageSize = parseInt(queryGet(r, "pageSize"), defPageSize)
 	if pageSize <= 0 {
 		pageSize = defPageSize
 	}
-	if maxPageSize > 0 && pageSize > maxPageSize {
-		pageSize = maxPageSize
+	if pageSize > max {
+		pageSize = max
+	}
+	if (page - 1) > maxOffset/pageSize {
+		page = maxOffset/pageSize + 1
 	}
 	return page, pageSize
 }
 
-func newPaginated(items any, page, pageSize int, totalCount int64, maxPageSize, defPageSize int) paginated {
+func offsetOf(page, pageSize int) int { return (page - 1) * pageSize }
+
+func (s *Server) newPaginated(items any, page, pageSize int, totalCount int64, maxPageSize, defPageSize int) paginated {
 	totalPages := 0
 	if pageSize > 0 {
 		totalPages = int(math.Ceil(float64(totalCount) / float64(pageSize)))
@@ -45,29 +68,48 @@ func newPaginated(items any, page, pageSize int, totalCount int64, maxPageSize, 
 		TotalCount:      totalCount,
 		HasPreviousPage: page > 1,
 		HasNextPage:     page < totalPages,
-		MaxPageSize:     maxPageSize,
+		MaxPageSize:     s.effectiveMaxPageSize(maxPageSize),
 		DefaultPageSize: defPageSize,
 	}
 }
 
-func repeatedQuery(r *http.Request, key string) []string {
-	return r.URL.Query()[key]
+func (s *Server) listParam(r *http.Request, key string, lower bool) ([]string, error) {
+	raw := queryAll(r, key)
+	seen := make(map[string]bool, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		v = strings.TrimSpace(v)
+		if lower {
+			v = strings.ToLower(v)
+		}
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	if len(out) > s.cfg.Limits.MaxFilterValues {
+		return nil, fmt.Errorf("Too many values for '%s' (maximum %d).", key, s.cfg.Limits.MaxFilterValues)
+	}
+	return out, nil
 }
 
-func parseLongList(values []string) ([]int64, error) {
-	out := make([]int64, 0, len(values))
-	for _, v := range values {
-		n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
-		if err != nil {
-			return nil, err
+func (s *Server) idListParam(r *http.Request, key string) ([]int64, error) {
+	vals, err := s.listParam(r, key, false)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]int64, 0, len(vals))
+	for _, v := range vals {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			out = append(out, n)
 		}
-		out = append(out, n)
 	}
 	return out, nil
 }
 
 func queryBool(r *http.Request, key string, def bool) bool {
-	v := strings.TrimSpace(r.URL.Query().Get(key))
+	v := strings.TrimSpace(queryGet(r, key))
 	if v == "" {
 		return def
 	}
@@ -76,4 +118,9 @@ func queryBool(r *http.Request, key string, def bool) bool {
 		return def
 	}
 	return b
+}
+
+func likePattern(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return "%" + r.Replace(s) + "%"
 }

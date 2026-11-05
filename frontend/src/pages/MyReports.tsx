@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useEffectEvent } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 import { Report, PaginatedList, ReportStatus } from '../types';
 import { useNotification } from '../context/NotificationContext';
-import { Flag, Edit2, Ban, Inbox } from 'lucide-react';
+import { Edit2, Ban, Inbox } from 'lucide-react';
 import Pagination from '../components/Pagination';
 import ReportCard from '../components/ReportCard';
 import StatusTabs from '../components/StatusTabs';
@@ -40,22 +40,24 @@ const MyReports = () => {
         if (!user) return;
         setLoading(true);
         try {
-            // The endpoint auto-scopes non-moderators to their own reports.
             const params: Record<string, string | number> = { page, pageSize };
             if (statusFilter !== 'All') params.status = statusFilter;
             const { data } = await api.get<PaginatedList<Report>>('/reports', { params });
             setReports(data.items);
             setTotalPages(data.totalPages);
         } catch {
-            // handled globally
+            return;
         } finally {
             setLoading(false);
         }
     };
 
+    const loadReports = useEffectEvent(() => {
+        fetchReports();
+    });
+
     useEffect(() => {
-        if (user) fetchReports();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        if (user) loadReports();
     }, [page, user, statusFilter]);
 
     useEffect(() => { setPage(1); }, [statusFilter]);
@@ -68,7 +70,7 @@ const MyReports = () => {
             showNotification('success', 'Report updated');
             setEditing(null);
         } catch {
-            // handled globally
+            return;
         }
     };
 
@@ -81,57 +83,51 @@ const MyReports = () => {
             invalidateNavBadges(queryClient);
             fetchReports();
         } catch {
-            // handled globally
+            return;
         }
     };
 
     if (!user) return null;
 
     return (
-        <div className="container mx-auto p-6 md:p-10 h-full flex flex-col">
+        <div className="page flex h-full flex-col">
             <MetaTags title="My Reports" description="Images you have reported." />
 
-            <div className="mb-6">
-                <h1 className="text-3xl font-black flex items-center gap-3 text-foreground">
-                    <Flag className="text-primary" size={32} /> My Reports
-                </h1>
-                <p className="text-muted-foreground mt-1">Images you've reported and their status.</p>
+            <div className="page-header">
+                <div>
+                    <h1 className="page-title">My Reports</h1>
+                    <p className="page-lede">Images you reported and what the moderators decided.</p>
+                </div>
             </div>
 
-            <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 mb-6">
+            <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
                 <StatusTabs value={statusFilter} onChange={setStatusFilter} options={STATUS_OPTIONS} />
             </div>
 
             {loading ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {[...Array(3)].map((_, i) => <div key={i} className="h-80 bg-muted rounded-xl animate-pulse" />)}
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {[...Array(3)].map((_, i) => <div key={i} className="h-80 animate-pulse rounded-[var(--radius-panel)] bg-sleeve" />)}
                 </div>
             ) : reports.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-64 text-muted-foreground border-2 border-dashed border-border rounded-xl bg-card/30">
-                    <Inbox size={48} className="mb-4 opacity-20" />
-                    <p className="text-lg font-medium">No reports here</p>
-                    <p className="text-sm">Reports you submit on images will appear here.</p>
+                <div className="flex h-64 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-border px-6 text-center text-muted-foreground">
+                    <Inbox size={40} className="mb-3 opacity-30" aria-hidden="true" />
+                    <p className="font-semibold text-foreground">No reports here</p>
+                    <p className="mt-1 text-sm">When you report an image, it shows up here with its status.</p>
                 </div>
             ) : (
                 <div className="flex-1">
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                         {reports.map(report => (
                             <ReportCard
                                 key={report.id}
                                 report={report}
                                 footer={report.status === ReportStatus.Pending && (
-                                    <div className="p-3 border-t border-border flex gap-2">
-                                        <button
-                                            onClick={() => setEditing(report)}
-                                            className="flex-1 py-2 bg-secondary hover:bg-primary/10 hover:text-primary rounded-lg font-bold text-sm transition-colors flex items-center justify-center gap-2"
-                                        >
-                                            <Edit2 size={16} /> Edit
+                                    <div className="flex gap-2 border-t border-border p-3">
+                                        <button type="button" onClick={() => setEditing(report)} className="btn btn-soft btn-sm flex-1">
+                                            <Edit2 size={15} aria-hidden="true" /> Edit
                                         </button>
-                                        <button
-                                            onClick={() => setCancelTarget(report)}
-                                            className="flex-1 py-2 bg-secondary hover:bg-red-500/10 hover:text-red-600 rounded-lg font-bold text-sm transition-colors flex items-center justify-center gap-2"
-                                        >
-                                            <Ban size={16} /> Cancel
+                                        <button type="button" onClick={() => setCancelTarget(report)} className="btn btn-soft btn-sm flex-1 hover:bg-destructive/10 hover:text-destructive">
+                                            <Ban size={15} aria-hidden="true" /> Withdraw
                                         </button>
                                     </div>
                                 )}

@@ -2,11 +2,13 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/waifu-im/waifu-api/backend/internal/auth"
 )
 
@@ -24,16 +26,21 @@ type bannerRow struct {
 	UpdatedByID *int64
 }
 
-func (s *Server) loadBanner(ctx context.Context) *bannerRow {
+func (s *Server) loadBanner(ctx context.Context) (*bannerRow, error) {
 	var b bannerRow
+	var msg *string
 	err := s.db.QueryRow(ctx, `
 		SELECT "Message", "Variant", "IsEnabled", "UpdatedAt", "UpdatedById"
 		FROM "SiteBanners" WHERE "Id" = 1`).
-		Scan(&b.Message, &b.Variant, &b.IsEnabled, &b.UpdatedAt, &b.UpdatedByID)
-	if err != nil {
-		return nil
+		Scan(&msg, &b.Variant, &b.IsEnabled, &b.UpdatedAt, &b.UpdatedByID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
 	}
-	return &b
+	if err != nil {
+		return nil, err
+	}
+	b.Message = orEmpty(msg)
+	return &b, nil
 }
 
 func (s *Server) bannerPermissionDenied(w http.ResponseWriter, r *http.Request) {
@@ -41,7 +48,10 @@ func (s *Server) bannerPermissionDenied(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleGetBanner(w http.ResponseWriter, r *http.Request) {
-	b := s.loadBanner(r.Context())
+	b, err := s.loadBanner(r.Context())
+	if err != nil {
+		s.log.Warn("banner lookup failed", "error", err)
+	}
 	if b == nil || !b.IsEnabled || strings.TrimSpace(b.Message) == "" {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -53,29 +63,38 @@ func (s *Server) handleGetBanner(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) bannerUpdatedBy(ctx context.Context, id *int64) *userMinimalDto {
+	if id == nil {
+		return nil
+	}
+	var u userMinimalDto
+	var name *string
+	if err := s.db.QueryRow(ctx, `SELECT "Id","Name","AvatarUrl" FROM "Users" WHERE "Id" = $1`, *id).
+		Scan(&u.ID, &name, &u.AvatarURL); err != nil {
+		return nil
+	}
+	u.Name = orEmpty(name)
+	return &u
+}
+
 func (s *Server) handleGetBannerSettings(w http.ResponseWriter, r *http.Request) {
 	ident := IdentityFromContext(r.Context())
 	if !auth.MeetsPermission(ident.Role, s.cfg.Permissions.BannerManagementMinRole, auth.RoleModerator) {
 		s.bannerPermissionDenied(w, r)
 		return
 	}
-	b := s.loadBanner(r.Context())
-	dto := bannerSettingsDto{}
+	b, err := s.loadBanner(r.Context())
+	if err != nil {
+		InternalError(w, r, s.log, err)
+		return
+	}
+	dto := bannerSettingsDto{Variant: "Info"}
 	if b != nil {
 		dto.Message = b.Message
 		dto.Variant = bannerVariantString(b.Variant)
 		dto.IsEnabled = b.IsEnabled
 		dto.UpdatedAt = b.UpdatedAt
-		if b.UpdatedByID != nil {
-			var u userMinimalDto
-			if err := s.db.QueryRow(r.Context(), `SELECT "Id","Name","AvatarUrl" FROM "Users" WHERE "Id" = $1`, *b.UpdatedByID).
-				Scan(&u.ID, &u.Name, &u.AvatarURL); err == nil {
-				dto.UpdatedBy = &u
-			}
-		}
-	} else {
-		dto.Variant = "Info"
-		dto.IsEnabled = false
+		dto.UpdatedBy = s.bannerUpdatedBy(r.Context(), b.UpdatedByID)
 	}
 	writeJSON(w, http.StatusOK, dto)
 }
@@ -123,41 +142,32 @@ func (s *Server) handlePutBannerSettings(w http.ResponseWriter, r *http.Request)
 		invalidEnumProblem(w, r, "variant", req.Variant)
 		return
 	}
-
 	if req.IsEnabled && strings.TrimSpace(req.Message) == "" {
 		BadRequest(w, r, "An enabled banner needs a message.")
 		return
 	}
-	if len(req.Message) > 500 {
+	if runeLen(req.Message) > 500 {
 		WriteValidationProblem(w, r, map[string][]string{
 			"Message": {"Message must not exceed 500 characters."},
 		})
 		return
 	}
 
-	_, err := s.db.Exec(r.Context(), `
+	if _, err := s.db.Exec(r.Context(), `
 		INSERT INTO "SiteBanners" ("Id","Message","Variant","IsEnabled","UpdatedAt","UpdatedById")
 		VALUES (1,$1,$2,$3,now(),$4)
 		ON CONFLICT ("Id") DO UPDATE
 		SET "Message" = EXCLUDED."Message", "Variant" = EXCLUDED."Variant",
 			"IsEnabled" = EXCLUDED."IsEnabled", "UpdatedAt" = now(), "UpdatedById" = EXCLUDED."UpdatedById"`,
-		req.Message, variant, req.IsEnabled, ident.UserID)
-	if err != nil {
+		req.Message, variant, req.IsEnabled, ident.UserID); err != nil {
 		InternalError(w, r, s.log, err)
 		return
 	}
 
-	b := s.loadBanner(r.Context())
 	dto := bannerSettingsDto{Message: req.Message, Variant: bannerVariantString(variant), IsEnabled: req.IsEnabled}
-	if b != nil {
+	if b, err := s.loadBanner(r.Context()); err == nil && b != nil {
 		dto.UpdatedAt = b.UpdatedAt
-		if b.UpdatedByID != nil {
-			var u userMinimalDto
-			if err := s.db.QueryRow(r.Context(), `SELECT "Id","Name","AvatarUrl" FROM "Users" WHERE "Id" = $1`, *b.UpdatedByID).
-				Scan(&u.ID, &u.Name, &u.AvatarURL); err == nil {
-				dto.UpdatedBy = &u
-			}
-		}
+		dto.UpdatedBy = s.bannerUpdatedBy(r.Context(), b.UpdatedByID)
 	}
 	if dto.UpdatedBy == nil {
 		dto.UpdatedBy = &userMinimalDto{ID: ident.UserID, Name: ident.Name}

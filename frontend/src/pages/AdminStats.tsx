@@ -1,9 +1,10 @@
-﻿import { useState, useEffect } from 'react';
+import { useMemo, useRef, useState, KeyboardEvent, PointerEvent, ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { Link } from 'react-router';
+import { Key, Globe } from 'lucide-react';
 import api from '../services/api';
-import { BarChart, Activity, Calendar, Image as ImageIcon, Tag as TagIcon, Users, Trophy, ShieldCheck, UserX, Key, Globe, Scale, Upload } from 'lucide-react';
 import { useRequireAuth } from '../hooks/useRequireAuth';
 import { Role } from '../types';
-import { Link } from 'react-router-dom';
 
 interface DailyStat {
     date: string;
@@ -30,7 +31,7 @@ interface AlbumUserStat {
     albumImageCount: number;
 }
 
-interface AdminStats {
+interface AdminStatsDto {
     requestsToday: number;
     history: DailyStat[];
     topUsers: UserStat[];
@@ -48,360 +49,313 @@ interface AdminStats {
     totalArtists: number;
 }
 
-const AdminStats = () => {
-    const user = useRequireAuth();
-    const [stats, setStats] = useState<AdminStats | null>(null);
-    const [loading, setLoading] = useState(true);
+const DAY_MS = 86_400_000;
+const HISTORY_DAYS = 366;
 
-    useEffect(() => {
-        if (user && user.role === Role.Admin) {
-            api.get<AdminStats>('/stats/admin')
-                .then(res => setStats(res.data))
-                .catch(console.error)
-                .finally(() => setLoading(false));
-        }
-    }, [user]);
+const utcDate = (iso: string, options: Intl.DateTimeFormatOptions = {}) =>
+    new Date(`${iso}T00:00:00Z`).toLocaleDateString(undefined, { timeZone: 'UTC', ...options });
 
-    if (!user || user.role !== Role.Admin) return <div className="p-10 text-center">Access Denied</div>;
-    if (loading) return <div className="p-10 text-center">Loading stats...</div>;
+const compact = (n: number) => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 
-    const history = stats?.history || [];
-    
-    // Round max count to nearest nice number (e.g. 448 -> 500, 671 -> 700)
-    const rawMax = history.length ? Math.max(...history.map(h => h.count)) : 1;
-    const magnitude = Math.pow(10, Math.floor(Math.log10(rawMax)));
-    const maxCount = Math.ceil(rawMax / magnitude) * magnitude;
-    
-    const totalRequestsYear = history.reduce((acc, curr) => acc + curr.count, 0);
+function fillHistory(history: DailyStat[]): DailyStat[] {
+    const counts = new Map(history.map((d) => [d.date.slice(0, 10), d.count]));
+    const today = new Date();
+    const end = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+    const days: DailyStat[] = [];
+    for (let i = HISTORY_DAYS - 1; i >= 0; i--) {
+        const date = new Date(end - i * DAY_MS).toISOString().slice(0, 10);
+        days.push({ date, count: counts.get(date) ?? 0 });
+    }
+    return days;
+}
 
-    // Calculate difference
-    const diffAuth = Math.abs((stats?.totalAuthenticatedRequests || 0) - (stats?.totalUnauthenticatedRequests || 0));
-    const isAuthMore = (stats?.totalAuthenticatedRequests || 0) >= (stats?.totalUnauthenticatedRequests || 0);
+function niceMax(value: number): number {
+    if (value <= 4) return 4;
+    const magnitude = Math.pow(10, Math.floor(Math.log10(value)));
+    const steps = [1, 2, 2.5, 5, 10];
+    const normalized = value / magnitude;
+    const step = steps.find((s) => normalized <= s) ?? 10;
+    return step * magnitude;
+}
 
-    // Generate SVG Points for Line Chart
-    const points = history.map((h, i) => {
-        const x = ((i + 0.5) / history.length) * 100;
-        const y = 100 - ((h.count / maxCount) * 100);
-        return `${x},${y}`;
-    }).join(' ');
+const RequestChart = ({ days }: { days: DailyStat[] }) => {
+    const [active, setActive] = useState<number | null>(null);
+    const plotRef = useRef<HTMLDivElement>(null);
+    const max = niceMax(Math.max(...days.map((d) => d.count), 0));
+    const ticks = [max, max * 0.75, max * 0.5, max * 0.25, 0];
+    const x = (i: number) => (days.length <= 1 ? 50 : (i / (days.length - 1)) * 100);
+    const y = (count: number) => 100 - (count / max) * 100;
+    const line = days.map((d, i) => `${x(i).toFixed(3)},${y(d.count).toFixed(3)}`).join(' ');
+    const area = `0,100 ${line} 100,100`;
+    const months = days
+        .map((d, i) => ({ d, i }))
+        .filter(({ d, i }) => d.date.endsWith('-01') && i > 6 && i < days.length - 6);
 
-    const firstX = history.length ? (0.5 / history.length) * 100 : 0;
-    const lastX = history.length ? ((history.length - 0.5) / history.length) * 100 : 100;
-    const areaPoints = `${points} ${lastX},100 ${firstX},100`;
+    const pick = (e: PointerEvent<HTMLDivElement>) => {
+        const rect = plotRef.current?.getBoundingClientRect();
+        if (!rect || rect.width === 0) return;
+        const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+        setActive(Math.round(ratio * (days.length - 1)));
+    };
+
+    const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+        const last = days.length - 1;
+        const current = active ?? last;
+        const next = e.key === 'ArrowLeft' ? current - 1
+            : e.key === 'ArrowRight' ? current + 1
+                : e.key === 'Home' ? 0
+                    : e.key === 'End' ? last
+                        : e.key === 'PageUp' ? current - 30
+                            : e.key === 'PageDown' ? current + 30 : null;
+        if (next === null) return;
+        e.preventDefault();
+        setActive(Math.min(last, Math.max(0, next)));
+    };
+
+    const point = active !== null ? days[active] : null;
 
     return (
-        <div className="container mx-auto p-6 md:p-10">
-            <div className="flex items-center gap-3 mb-8">
-                <BarChart className="text-primary" size={32} />
-                <h1 className="text-3xl font-black text-foreground">Admin Dashboard</h1>
-            </div>
-
-            {/* SUMMARY CARDS */}
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 mb-8">
-                <div className="bg-card border border-border p-6 rounded-xl shadow-sm flex items-center gap-4">
-                    <div className="p-3 bg-primary/10 text-primary rounded-full shrink-0">
-                        <Activity size={32} />
-                    </div>
-                    <div className="min-w-0">
-                        <p className="text-sm text-muted-foreground font-bold uppercase tracking-wider">Requests Today</p>
-                        <p className="text-2xl xl:text-3xl font-black truncate" title={stats?.requestsToday.toLocaleString()}>{stats?.requestsToday.toLocaleString()}</p>
-                    </div>
+        <div className="relative">
+            <div className="flex">
+                <div className="relative h-72 w-10 shrink-0 select-none text-right text-[0.6875rem] text-muted-foreground tabular sm:h-80" aria-hidden="true">
+                    {ticks.map((t, i) => (
+                        <span key={i} className="absolute right-2 -translate-y-1/2" style={{ top: `${(i / (ticks.length - 1)) * 100}%` }}>{compact(t)}</span>
+                    ))}
                 </div>
-
-                <div className="bg-card border border-border p-6 rounded-xl shadow-sm flex items-center gap-4">
-                    <div className="p-3 bg-blue-500/10 text-blue-500 rounded-full shrink-0">
-                        <ImageIcon size={32} />
-                    </div>
-                    <div className="min-w-0">
-                        <p className="text-sm text-muted-foreground font-bold uppercase tracking-wider">Total Images</p>
-                        <p className="text-2xl xl:text-3xl font-black truncate" title={stats?.totalImages.toLocaleString()}>{stats?.totalImages.toLocaleString()}</p>
-                    </div>
-                </div>
-
-                <div className="bg-card border border-border p-6 rounded-xl shadow-sm flex items-center gap-4">
-                    <div className="p-3 bg-green-500/10 text-green-500 rounded-full shrink-0">
-                        <TagIcon size={32} />
-                    </div>
-                    <div className="min-w-0">
-                        <p className="text-sm text-muted-foreground font-bold uppercase tracking-wider">Total Tags</p>
-                        <p className="text-2xl xl:text-3xl font-black truncate" title={stats?.totalTags.toLocaleString()}>{stats?.totalTags.toLocaleString()}</p>
-                    </div>
-                </div>
-
-                <div className="bg-card border border-border p-6 rounded-xl shadow-sm flex items-center gap-4">
-                    <div className="p-3 bg-purple-500/10 text-purple-500 rounded-full shrink-0">
-                        <Users size={32} />
-                    </div>
-                    <div className="min-w-0">
-                        <p className="text-sm text-muted-foreground font-bold uppercase tracking-wider">Total Artists</p>
-                        <p className="text-2xl xl:text-3xl font-black truncate" title={stats?.totalArtists.toLocaleString()}>{stats?.totalArtists.toLocaleString()}</p>
-                    </div>
-                </div>
-            </div>
-
-            {/* CHART SECTION - Full Width */}
-            <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm p-6 mb-8">
-                <div className="mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                    <h2 className="text-xl font-bold flex items-center gap-2">
-                        <Calendar size={20} className="text-muted-foreground" /> Request History (Last Year)
-                    </h2>
-                    <div className="flex gap-6 text-sm">
-                        <div>
-                            <span className="text-muted-foreground">This Year: </span>
-                            <span className="font-bold text-foreground">{totalRequestsYear.toLocaleString()}</span>
-                        </div>
-                        <div>
-                            <span className="text-muted-foreground">All Time: </span>
-                            <span className="font-bold text-foreground">{stats?.totalRequests.toLocaleString()}</span>
-                        </div>
-                    </div>
-                </div>
-                
-                <div className="relative h-[400px] w-full pt-10 pb-6 pl-12 pr-2">
-                    {/* Y-Axis Labels (Regular Intervals) */}
-                    <div className="absolute left-0 top-10 bottom-6 w-10 flex flex-col justify-between text-[10px] text-muted-foreground font-mono text-right pr-2 select-none pointer-events-none">
-                        <span>{maxCount.toLocaleString()}</span>
-                        <span>{Math.round(maxCount * 0.75).toLocaleString()}</span>
-                        <span>{Math.round(maxCount * 0.5).toLocaleString()}</span>
-                        <span>{Math.round(maxCount * 0.25).toLocaleString()}</span>
-                        <span>0</span>
-                    </div>
-
-                    {/* Horizontal Grid Lines */}
-                    <div className="absolute left-12 right-2 top-10 bottom-6 flex flex-col justify-between pointer-events-none">
-                        <div className="border-t border-border/50 w-full h-0"></div>
-                        <div className="border-t border-border/50 w-full h-0"></div>
-                        <div className="border-t border-border/50 w-full h-0"></div>
-                        <div className="border-t border-border/50 w-full h-0"></div>
-                        <div className="border-t border-border/50 w-full h-0"></div>
-                    </div>
-
-                    {history.length > 0 ? (
+                <div
+                    ref={plotRef}
+                    className="relative h-72 min-w-0 flex-1 cursor-crosshair rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-4 focus-visible:ring-offset-card sm:h-80"
+                    tabIndex={0}
+                    role="slider"
+                    aria-label="Requests per day"
+                    aria-valuemin={0}
+                    aria-valuemax={days.length - 1}
+                    aria-valuenow={active ?? days.length - 1}
+                    aria-valuetext={`${utcDate((point ?? days[days.length - 1]).date)}: ${(point ?? days[days.length - 1]).count.toLocaleString()} requests`}
+                    onPointerMove={pick}
+                    onPointerDown={pick}
+                    onPointerLeave={() => setActive(null)}
+                    onKeyDown={onKeyDown}
+                    onBlur={() => setActive(null)}
+                >
+                    {ticks.map((_, i) => (
+                        <div key={i} className="pointer-events-none absolute inset-x-0 h-px bg-border" style={{ top: `${(i / (ticks.length - 1)) * 100}%` }} aria-hidden="true" />
+                    ))}
+                    <svg className="absolute inset-0 size-full overflow-visible text-chart-line" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                        <polygon points={area} fill="currentColor" fillOpacity="0.1" />
+                        <polyline points={line} fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                    {point && active !== null && (
                         <>
-                            <svg className="absolute inset-0 w-full h-full pl-12 pr-2 pt-10 pb-6 text-primary" viewBox="0 0 100 100" preserveAspectRatio="none">
-                                <defs>
-                                    <linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="0%" stopColor="currentColor" stopOpacity="0.3" />
-                                        <stop offset="100%" stopColor="currentColor" stopOpacity="0" />
-                                    </linearGradient>
-                                </defs>
-                                <polygon points={areaPoints} fill="url(#chartGradient)" />
-                                <polyline points={points} fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
-                            </svg>
-
-                            <div className="absolute inset-0 flex items-end w-full h-full pl-12 pr-2 pt-10 pb-6">
-                                {history.map((day, i) => {
-                                    const date = new Date(day.date);
-                                    const isMonthStart = date.getDate() === 1;
-                                    
-                                    return (
-                                        <div key={i} className="flex-1 h-full group relative flex flex-col justify-end">
-                                            <div className="absolute top-0 bottom-0 left-1/2 w-[1px] bg-foreground/20 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                                            <div 
-                                                className="absolute left-1/2 -translate-x-1/2 w-3 h-3 bg-primary rounded-full border-2 border-background opacity-0 group-hover:opacity-100 transition-opacity z-10"
-                                                style={{ bottom: `${(day.count / maxCount) * 100}%`, marginBottom: '-6px' }}
-                                            ></div>
-                                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-20 bg-popover text-popover-foreground text-xs p-2 rounded shadow-lg border border-border whitespace-nowrap pointer-events-none">
-                                                <p className="font-bold">{date.toLocaleDateString()}</p>
-                                                <p>{day.count.toLocaleString()} requests</p>
-                                            </div>
-                                            {isMonthStart && (
-                                                <div className="absolute top-full mt-2 text-[10px] text-muted-foreground font-bold -translate-x-1/2 left-1/2 pointer-events-none">
-                                                    {date.toLocaleDateString(undefined, { month: 'short' })}
-                                                </div>
-                                            )}
-                                        </div>
-                                    );
-                                })}
+                            <div className="pointer-events-none absolute inset-y-0 w-px bg-foreground/30" style={{ left: `${x(active)}%` }} aria-hidden="true" />
+                            <div
+                                className="pointer-events-none absolute size-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-chart-line ring-2 ring-card"
+                                style={{ left: `${x(active)}%`, top: `${y(point.count)}%` }}
+                                aria-hidden="true"
+                            />
+                            <div
+                                className={`pointer-events-none absolute top-2 z-10 whitespace-nowrap rounded-2xl border border-border bg-popover px-3 py-2 text-popover-foreground shadow-float ${x(active) > 70 ? '-translate-x-[calc(100%+0.75rem)]' : 'translate-x-3'}`}
+                                style={{ left: `${x(active)}%` }}
+                            >
+                                <p className="text-base font-bold tabular">{point.count.toLocaleString()} <span className="text-xs font-medium text-muted-foreground">requests</span></p>
+                                <p className="text-xs text-muted-foreground">{utcDate(point.date, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}</p>
                             </div>
                         </>
-                    ) : (
-                        <div className="h-full flex items-center justify-center text-muted-foreground">
-                            No history data available.
-                        </div>
                     )}
                 </div>
             </div>
+            <div className="relative ml-10 mt-2 h-4 select-none text-[0.6875rem] text-muted-foreground" aria-hidden="true">
+                {months.map(({ d, i }) => (
+                    <span key={d.date} className="absolute -translate-x-1/2" style={{ left: `${x(i)}%` }}>{utcDate(d.date, { month: 'short' })}</span>
+                ))}
+            </div>
+        </div>
+    );
+};
 
-            {/* DETAILED STATS GRID */}
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
-                
-                {/* AUTH STATS */}
-                <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm p-6">
-                    <h2 className="text-xl font-bold flex items-center gap-2 mb-6">
-                        <Activity size={20} className="text-muted-foreground" /> Traffic Source
-                    </h2>
-                    <div className="space-y-4">
-                        <div className="flex items-center justify-between p-3 bg-secondary/30 rounded-lg">
-                            <div className="flex items-center gap-3 min-w-0">
-                                <div className="p-2 bg-green-500/10 text-green-600 rounded-lg shrink-0">
-                                    <ShieldCheck size={18} />
-                                </div>
-                                <span className="font-medium truncate">Authenticated</span>
-                            </div>
-                            <span className="font-mono font-bold shrink-0">{stats?.totalAuthenticatedRequests.toLocaleString()}</span>
+const Leaderboard = ({ title, rows, empty = 'No data yet.' }: {
+    title: string;
+    rows: { id: number; name: string; value: number; detail?: ReactNode }[];
+    empty?: string;
+}) => (
+    <section className="panel p-5">
+        <h2 className="section-title">{title}</h2>
+        {rows.length === 0 ? (
+            <p className="mt-4 text-sm text-muted-foreground">{empty}</p>
+        ) : (
+            <ol className="mt-3 divide-y divide-border">
+                {rows.map((row, i) => (
+                    <li key={row.id} className="flex items-center gap-3 py-2.5">
+                        <span className="w-5 shrink-0 text-right text-sm text-muted-foreground tabular">{i + 1}</span>
+                        <div className="min-w-0 flex-1">
+                            <Link to={`/users?includedIds=${row.id}`} className="block truncate font-medium hover:underline" title={row.name}>{row.name}</Link>
+                            {row.detail}
                         </div>
-                        
-                        <div className="pl-4 space-y-2 border-l-2 border-border ml-4">
-                            <div className="flex items-center justify-between text-sm">
-                                <div className="flex items-center gap-2 text-muted-foreground min-w-0">
-                                    <Key size={14} className="shrink-0"/>
-                                    <span className="truncate">API Key</span>
-                                </div>
-                                <span className="font-mono shrink-0">{stats?.totalApiKeyRequests.toLocaleString()}</span>
-                            </div>
-                            <div className="flex items-center justify-between text-sm">
-                                <div className="flex items-center gap-2 text-muted-foreground min-w-0">
-                                    <Globe size={14} className="shrink-0"/>
-                                    <span className="truncate">Web (JWT)</span>
-                                </div>
-                                <span className="font-mono shrink-0">{stats?.totalJwtRequests.toLocaleString()}</span>
-                            </div>
+                        <span className="shrink-0 text-sm font-semibold tabular">{row.value.toLocaleString()}</span>
+                    </li>
+                ))}
+            </ol>
+        )}
+    </section>
+);
+
+const AdminStats = () => {
+    const user = useRequireAuth();
+    const isAdmin = user?.role === Role.Admin;
+    const statsQuery = useQuery({
+        queryKey: ['stats', 'admin'],
+        enabled: !!isAdmin,
+        queryFn: async () => (await api.get<AdminStatsDto>('/stats/admin')).data,
+    });
+    const stats = statsQuery.data;
+    const days = useMemo(() => fillHistory(stats?.history ?? []), [stats?.history]);
+
+    if (!user) return null;
+    if (!isAdmin) return <div className="page text-center text-muted-foreground">Only administrators can see the statistics.</div>;
+    if (statsQuery.isPending) return <div className="page text-center text-muted-foreground" role="status">Loading statistics…</div>;
+    if (statsQuery.isError || !stats) {
+        return (
+            <div className="page flex flex-col items-center text-center" role="alert">
+                <p className="font-semibold">The statistics could not be loaded</p>
+                <button type="button" onClick={() => statsQuery.refetch()} className="btn btn-secondary mt-4">Try again</button>
+            </div>
+        );
+    }
+
+    const yearTotal = days.reduce((acc, d) => acc + d.count, 0);
+    const authTotal = stats.totalAuthenticatedRequests;
+    const anonTotal = stats.totalUnauthenticatedRequests;
+    const trafficTotal = Math.max(1, authTotal + anonTotal);
+    const monthly = Object.entries(days.reduce<Record<string, number>>((acc, d) => {
+        const month = d.date.slice(0, 7);
+        acc[month] = (acc[month] ?? 0) + d.count;
+        return acc;
+    }, {})).toReversed();
+
+    const tiles = [
+        { label: 'Requests today', value: stats.requestsToday },
+        { label: 'Images', value: stats.totalImages },
+        { label: 'Tags', value: stats.totalTags },
+        { label: 'Artists', value: stats.totalArtists },
+    ];
+
+    const traffic = [
+        { label: 'Authenticated', value: authTotal, children: [
+            { label: 'API key', value: stats.totalApiKeyRequests, icon: Key },
+            { label: 'Web session', value: stats.totalJwtRequests, icon: Globe },
+        ] },
+        { label: 'Anonymous', value: anonTotal, children: [] },
+    ];
+
+    return (
+        <div className="page">
+            <div className="page-header">
+                <div>
+                    <h1 className="page-title">Statistics</h1>
+                    <p className="page-lede">Traffic and activity across the whole API. Days are counted in UTC.</p>
+                </div>
+            </div>
+
+            <dl className="mb-6 grid grid-cols-2 gap-4 xl:grid-cols-4">
+                {tiles.map((tile) => (
+                    <div key={tile.label} className="panel flex flex-col-reverse p-5">
+                        <dt className="mt-1 text-sm text-muted-foreground">{tile.label}</dt>
+                        <dd className="truncate text-3xl font-black tabular" title={tile.value.toLocaleString()}>{tile.value.toLocaleString()}</dd>
+                    </div>
+                ))}
+            </dl>
+
+            <section className="panel mb-6 p-5 sm:p-6">
+                <div className="mb-6 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
+                    <div>
+                        <h2 className="section-title">Requests per day</h2>
+                        <p className="text-sm text-muted-foreground">Last 12 months</p>
+                    </div>
+                    <dl className="flex gap-6 text-sm">
+                        <div>
+                            <dt className="text-muted-foreground">Last 12 months</dt>
+                            <dd className="font-bold">{yearTotal.toLocaleString()}</dd>
                         </div>
-
-                        <div className="flex items-center justify-between p-3 bg-secondary/30 rounded-lg">
-                            <div className="flex items-center gap-3 min-w-0">
-                                <div className="p-2 bg-orange-500/10 text-orange-600 rounded-lg shrink-0">
-                                    <UserX size={18} />
-                                </div>
-                                <span className="font-medium truncate">Anonymous</span>
-                            </div>
-                            <span className="font-mono font-bold shrink-0">{stats?.totalUnauthenticatedRequests.toLocaleString()}</span>
+                        <div>
+                            <dt className="text-muted-foreground">All time</dt>
+                            <dd className="font-bold">{stats.totalRequests.toLocaleString()}</dd>
                         </div>
-
-                        <div className="flex items-center justify-between p-3 bg-secondary/30 rounded-lg">
-                            <div className="flex items-center gap-3 min-w-0">
-                                <div className="p-2 bg-gray-500/10 text-gray-600 rounded-lg shrink-0">
-                                    <Scale size={18} />
-                                </div>
-                                <span className="font-medium truncate">Difference ({isAuthMore ? 'Auth' : 'Anon'})</span>
-                            </div>
-                            <span className="font-mono font-bold shrink-0">{diffAuth.toLocaleString()}</span>
-                        </div>
-                    </div>
+                    </dl>
                 </div>
+                <RequestChart days={days} />
+                <details className="mt-5 border-t border-border pt-4">
+                    <summary className="cursor-pointer text-sm font-semibold text-muted-foreground hover:text-foreground">Monthly totals as a table</summary>
+                    <table className="mt-3 w-full max-w-md text-sm">
+                        <thead>
+                            <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                                <th scope="col" className="py-2 font-semibold">Month</th>
+                                <th scope="col" className="py-2 text-right font-semibold">Requests</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                            {monthly.map(([month, count]) => (
+                                <tr key={month}>
+                                    <td className="py-1.5">{utcDate(`${month}-01`, { year: 'numeric', month: 'long' })}</td>
+                                    <td className="py-1.5 text-right tabular">{count.toLocaleString()}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </details>
+            </section>
 
-                {/* TOP USERS */}
-                <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm p-6">
-                    <h2 className="text-xl font-bold flex items-center gap-2 mb-6">
-                        <Trophy size={20} className="text-yellow-500" /> Top Users
-                    </h2>
-                    <div className="space-y-4">
-                        {stats?.topUsers.map((u, i) => (
-                            <div key={u.id} className="flex flex-col p-3 bg-secondary/30 rounded-lg gap-2">
-                                <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-3 min-w-0">
-                                        <div className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${i === 0 ? 'bg-yellow-500/20 text-yellow-600' : i === 1 ? 'bg-gray-400/20 text-gray-500' : i === 2 ? 'bg-orange-500/20 text-orange-600' : 'bg-secondary text-muted-foreground'}`}>
-                                            {i + 1}
-                                        </div>
-                                        <Link to={`/users?includedIds=${u.id}`} className="font-medium truncate hover:text-primary hover:underline" title={u.name}>{u.name}</Link>
-                                    </div>
-                                    <span className="font-mono text-sm font-bold shrink-0">{u.requestCount.toLocaleString()}</span>
-                                </div>
-                                <div className="flex gap-3 text-[10px] text-muted-foreground pl-9">
-                                    <span title="API Key Requests" className="flex items-center gap-1"><Key size={10}/> {u.apiKeyRequestCount.toLocaleString()}</span>
-                                    <span title="Web Requests" className="flex items-center gap-1"><Globe size={10}/> {u.jwtRequestCount.toLocaleString()}</span>
-                                </div>
-                            </div>
-                        ))}
-                        {(!stats?.topUsers || stats.topUsers.length === 0) && (
-                            <div className="text-center text-muted-foreground py-4">No user data yet.</div>
-                        )}
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                <section className="panel p-5">
+                    <h2 className="section-title">Traffic source</h2>
+                    <div className="mt-4 flex h-2 overflow-hidden rounded-full bg-secondary" aria-hidden="true">
+                        <div className="h-full bg-chart-line" style={{ width: `${(authTotal / trafficTotal) * 100}%` }} />
                     </div>
-                </div>
-
-                {/* TOP API KEY USERS */}
-                <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm p-6">
-                    <h2 className="text-xl font-bold flex items-center gap-2 mb-6">
-                        <Key size={20} className="text-blue-500" /> Top API Key Users
-                    </h2>
-                    <div className="space-y-4">
-                        {stats?.topApiKeyUsers.map((u, i) => (
-                            <div key={u.id} className="flex items-center justify-between p-3 bg-secondary/30 rounded-lg">
-                                <div className="flex items-center gap-3 min-w-0">
-                                    <div className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${i === 0 ? 'bg-blue-500/20 text-blue-600' : 'bg-secondary text-muted-foreground'}`}>
-                                        {i + 1}
-                                    </div>
-                                    <Link to={`/users?includedIds=${u.id}`} className="font-medium truncate hover:text-primary hover:underline" title={u.name}>{u.name}</Link>
+                    <dl className="mt-4 space-y-3 text-sm">
+                        {traffic.map((row) => (
+                            <div key={row.label}>
+                                <div className="flex items-center justify-between gap-3">
+                                    <dt className="flex items-center gap-2 font-medium">
+                                        <span className={`size-2.5 rounded-full ${row.label === 'Authenticated' ? 'bg-chart-line' : 'bg-secondary ring-1 ring-inset ring-border'}`} aria-hidden="true" />
+                                        {row.label}
+                                    </dt>
+                                    <dd className="font-semibold tabular">
+                                        {row.value.toLocaleString()} <span className="font-normal text-muted-foreground">({Math.round((row.value / trafficTotal) * 100)}%)</span>
+                                    </dd>
                                 </div>
-                                <span className="font-mono text-sm font-bold shrink-0">{u.apiKeyRequestCount.toLocaleString()}</span>
+                                {row.children.length > 0 && (
+                                    <dl className="ml-4 mt-2 space-y-1.5 border-l border-border pl-4">
+                                        {row.children.map(({ label, value, icon: Icon }) => (
+                                            <div key={label} className="flex items-center justify-between gap-3 text-muted-foreground">
+                                                <dt className="flex items-center gap-2"><Icon size={13} aria-hidden="true" />{label}</dt>
+                                                <dd className="tabular">{value.toLocaleString()}</dd>
+                                            </div>
+                                        ))}
+                                    </dl>
+                                )}
                             </div>
                         ))}
-                        {(!stats?.topApiKeyUsers || stats.topApiKeyUsers.length === 0) && (
-                            <div className="text-center text-muted-foreground py-4">No data yet.</div>
-                        )}
-                    </div>
-                </div>
+                    </dl>
+                </section>
 
-                {/* TOP JWT USERS */}
-                <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm p-6">
-                    <h2 className="text-xl font-bold flex items-center gap-2 mb-6">
-                        <Globe size={20} className="text-purple-500" /> Top Web Users
-                    </h2>
-                    <div className="space-y-4">
-                        {stats?.topJwtUsers.map((u, i) => (
-                            <div key={u.id} className="flex items-center justify-between p-3 bg-secondary/30 rounded-lg">
-                                <div className="flex items-center gap-3 min-w-0">
-                                    <div className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${i === 0 ? 'bg-purple-500/20 text-purple-600' : 'bg-secondary text-muted-foreground'}`}>
-                                        {i + 1}
-                                    </div>
-                                    <Link to={`/users?includedIds=${u.id}`} className="font-medium truncate hover:text-primary hover:underline" title={u.name}>{u.name}</Link>
-                                </div>
-                                <span className="font-mono text-sm font-bold shrink-0">{u.jwtRequestCount.toLocaleString()}</span>
-                            </div>
-                        ))}
-                        {(!stats?.topJwtUsers || stats.topJwtUsers.length === 0) && (
-                            <div className="text-center text-muted-foreground py-4">No data yet.</div>
-                        )}
-                    </div>
-                </div>
-
-                {/* TOP UPLOADERS */}
-                <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm p-6">
-                    <h2 className="text-xl font-bold flex items-center gap-2 mb-6">
-                        <Upload size={20} className="text-green-500" /> Top Uploaders
-                    </h2>
-                    <div className="space-y-4">
-                        {stats?.topUploaders.map((u, i) => (
-                            <div key={u.id} className="flex items-center justify-between p-3 bg-secondary/30 rounded-lg">
-                                <div className="flex items-center gap-3 min-w-0">
-                                    <div className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${i === 0 ? 'bg-green-500/20 text-green-600' : i === 1 ? 'bg-gray-400/20 text-gray-500' : i === 2 ? 'bg-orange-500/20 text-orange-600' : 'bg-secondary text-muted-foreground'}`}>
-                                        {i + 1}
-                                    </div>
-                                    <Link to={`/users?includedIds=${u.id}`} className="font-medium truncate hover:text-primary hover:underline" title={u.name}>{u.name}</Link>
-                                </div>
-                                <span className="font-mono text-sm font-bold shrink-0">{u.uploadedImageCount.toLocaleString()}</span>
-                            </div>
-                        ))}
-                        {(!stats?.topUploaders || stats.topUploaders.length === 0) && (
-                            <div className="text-center text-muted-foreground py-4">No data yet.</div>
-                        )}
-                    </div>
-                </div>
-
-                {/* TOP ALBUM USERS */}
-                <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm p-6">
-                    <h2 className="text-xl font-bold flex items-center gap-2 mb-6">
-                        <ImageIcon size={20} className="text-pink-500" /> Top Album Users
-                    </h2>
-                    <div className="space-y-4">
-                        {stats?.topAlbumUsers.map((u, i) => (
-                            <div key={u.id} className="flex items-center justify-between p-3 bg-secondary/30 rounded-lg">
-                                <div className="flex items-center gap-3 min-w-0">
-                                    <div className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${i === 0 ? 'bg-pink-500/20 text-pink-600' : i === 1 ? 'bg-gray-400/20 text-gray-500' : i === 2 ? 'bg-orange-500/20 text-orange-600' : 'bg-secondary text-muted-foreground'}`}>
-                                        {i + 1}
-                                    </div>
-                                    <Link to={`/users?includedIds=${u.id}`} className="font-medium truncate hover:text-primary hover:underline" title={u.name}>{u.name}</Link>
-                                </div>
-                                <span className="font-mono text-sm font-bold shrink-0">{u.albumImageCount.toLocaleString()}</span>
-                            </div>
-                        ))}
-                        {(!stats?.topAlbumUsers || stats.topAlbumUsers.length === 0) && (
-                            <div className="text-center text-muted-foreground py-4">No data yet.</div>
-                        )}
-                    </div>
-                </div>
-
+                <Leaderboard
+                    title="Top users"
+                    empty="No user data yet."
+                    rows={stats.topUsers.map((u) => ({
+                        id: u.id,
+                        name: u.name,
+                        value: u.requestCount,
+                        detail: (
+                            <span className="flex gap-3 text-xs text-muted-foreground tabular">
+                                <span className="flex items-center gap-1" title="API key requests"><Key size={11} aria-hidden="true" />{u.apiKeyRequestCount.toLocaleString()}</span>
+                                <span className="flex items-center gap-1" title="Web requests"><Globe size={11} aria-hidden="true" />{u.jwtRequestCount.toLocaleString()}</span>
+                            </span>
+                        ),
+                    }))}
+                />
+                <Leaderboard title="Top API key users" rows={stats.topApiKeyUsers.map((u) => ({ id: u.id, name: u.name, value: u.apiKeyRequestCount }))} />
+                <Leaderboard title="Top web users" rows={stats.topJwtUsers.map((u) => ({ id: u.id, name: u.name, value: u.jwtRequestCount }))} />
+                <Leaderboard title="Top uploaders" rows={stats.topUploaders.map((u) => ({ id: u.id, name: u.name, value: u.uploadedImageCount }))} />
+                <Leaderboard title="Most images in albums" rows={stats.topAlbumUsers.map((u) => ({ id: u.id, name: u.name, value: u.albumImageCount }))} />
             </div>
         </div>
     );

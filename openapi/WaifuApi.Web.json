@@ -87,7 +87,7 @@
       "post": {
         "tags": ["Authentication"],
         "summary": "Create a new API key",
-        "description": "The full API key is only shown once in the response. Use it as `X-Api-Key: {your_key}`.",
+        "description": "The full API key is only shown once in the response. Use it as `X-Api-Key: {your_key}`. Requires a website session (JWT): requests authenticated with an API key are rejected with 403.",
         "security": [{ "Bearer": [] }],
         "requestBody": {
           "required": true,
@@ -114,7 +114,9 @@
             }
           },
           "400": { "description": "Invalid request data." },
-          "401": { "description": "Authentication required." }
+          "401": { "description": "Authentication required." },
+          "403": { "description": "API keys cannot be used to manage API keys." },
+          "409": { "description": "The maximum number of API keys per user is reached." }
         }
       }
     },
@@ -152,6 +154,7 @@
           },
           "400": { "description": "Invalid update data." },
           "401": { "description": "Authentication required." },
+          "403": { "description": "API keys cannot be used to manage API keys (use a website session)." },
           "404": { "description": "API key not found or doesn't belong to you." }
         }
       },
@@ -194,13 +197,32 @@
         "security": [{ "Bearer": [] }, { "ApiKey": [] }],
         "responses": {
           "200": {
-            "description": "Returns permission flags.",
+            "description": "Returns permission flags and the upload constraints enforced by the server.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "canManageBanner": { "type": "boolean" }
+                    "canManageBanner": { "type": "boolean" },
+                    "upload": {
+                      "type": "object",
+                      "description": "Upload constraints, so clients can validate files before uploading them. The server enforces them regardless.",
+                      "properties": {
+                        "maxFileSizeMb": { "type": "integer", "description": "Maximum file size in megabytes." },
+                        "allowedContentTypes": { "type": "array", "items": { "type": "string" }, "description": "Accepted MIME types." },
+                        "minWidth": { "type": "integer", "description": "Minimum width of still images in pixels." },
+                        "minHeight": { "type": "integer", "description": "Minimum height of still images in pixels." },
+                        "maxWidth": { "type": "integer", "description": "Maximum width of still images in pixels." },
+                        "maxHeight": { "type": "integer", "description": "Maximum height of still images in pixels." },
+                        "animatedMinWidth": { "type": "integer", "description": "Minimum width of animated images in pixels." },
+                        "animatedMinHeight": { "type": "integer", "description": "Minimum height of animated images in pixels." },
+                        "animatedMaxWidth": { "type": "integer", "description": "Maximum width of animated images in pixels." },
+                        "animatedMaxHeight": { "type": "integer", "description": "Maximum height of animated images in pixels." },
+                        "maxPixels": { "type": "integer", "format": "int64", "description": "Maximum number of pixels (width × height)." },
+                        "maxTags": { "type": "integer", "description": "Maximum number of tags per image." },
+                        "maxArtists": { "type": "integer", "description": "Maximum number of artists per image." }
+                      }
+                    }
                   }
                 }
               }

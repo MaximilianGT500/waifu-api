@@ -1,510 +1,379 @@
-import { Outlet, Link, useLocation } from 'react-router-dom';
+import { Outlet, Link, useLocation, useNavigationType } from 'react-router';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import {
     Sun, Moon, Menu, X, LogOut, Upload as UploadIcon,
-    Home, Image as ImageIcon, Tag as TagIcon, ChevronRight, PanelLeft,
-    User as UserIcon, Library, ChevronDown, Palette, Key, Users as UsersIcon, Flag, BarChart, Monitor, Book, Mail, Activity, HardDrive, Github, FileText, GitPullRequest, Megaphone, Scale, ShieldCheck
+    Home, Image as ImageIcon, Tag as TagIcon,
+    User as UserIcon, Library, ChevronDown, Palette, Key, Users as UsersIcon, Flag, BarChart, Monitor, HardDrive, GitPullRequest, Megaphone,
+    LucideIcon, Sparkles, History, WandSparkles,
 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, Suspense, ReactNode, ButtonHTMLAttributes } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import GlobalErrorHandler from '../GlobalErrorHandler';
-import { Dropdown, DropdownItem, DropdownLabel, DropdownSeparator } from '../Dropdown';
+import { Dropdown, DropdownTrigger, DropdownItem, DropdownLabel, DropdownSeparator, DropdownSwatch } from '../Dropdown';
 import { getEnv } from '../../utils/env';
+import { DESIGNS, currentDesign, switchDesign } from '../../utils/design';
+import { ACCENTS } from '../../utils/accent';
 import { Role } from '../../types';
 import { useNavBadges, invalidateNavBadges } from '../../hooks/useNavBadges';
 import { usePermissions } from '../../hooks/useBanner';
 import SiteBanner from '../SiteBanner';
+import SessionErrorBanner from '../SessionErrorBanner';
+import SafeExternalLink from '../ExternalLink';
+import ErrorBoundary from '../ErrorBoundary';
+import PageLoader from '../PageLoader';
+import { safeExternalUrl } from '../../utils/safeUrl';
+
+interface NavEntry {
+    key: string;
+    label: string;
+    icon: LucideIcon;
+    to: string;
+}
+
+interface FooterLink {
+    key: string;
+    label: string;
+    to?: string;
+    href?: string;
+}
+
+const roleLabel = (role: Role) => role === Role.Admin ? 'Admin' : role === Role.Moderator ? 'Moderator' : 'Member';
+
+const isActive = (pathname: string, to: string) => to === '/' ? pathname === '/' : pathname === to || pathname.startsWith(`${to}/`);
+
+const CountBadge = ({ count, tone }: { count: number; tone: 'brand' | 'danger' }) => {
+    if (count <= 0) return null;
+    return (
+        <span className={`ml-auto min-w-5 rounded-full px-1.5 py-0.5 text-center text-[0.6875rem] font-black leading-none tabular ${tone === 'danger' ? 'bg-destructive text-destructive-foreground' : 'bg-vivid text-vivid-foreground'}`}>
+            {count > 99 ? '99+' : count}
+        </span>
+    );
+};
+
+const Brand = ({ title, compact = false }: { title: string; compact?: boolean }) => (
+    <Link to="/" aria-label={`${title} home`} className="flex min-w-0 items-center gap-2.5 rounded-full outline-offset-4">
+        <img
+            src="/logo-96.png?v=20261024-logo-v2"
+            srcSet="/logo-96.png?v=20261024-logo-v2 2x, /logo-144.png?v=20261024-logo-v2 3x"
+            alt=""
+            width={38}
+            height={38}
+            className="size-[2.375rem] shrink-0 -rotate-6 rounded-[0.75rem] bg-card object-cover p-0.5 shadow-card"
+        />
+        <span className={`truncate text-lg font-black tracking-[-0.01em] ${compact ? 'hidden sm:block' : ''}`}>{title}</span>
+    </Link>
+);
+
+const HeaderIconButton = ({ children, ...rest }: { children: ReactNode } & ButtonHTMLAttributes<HTMLButtonElement>) => (
+    <button
+        type="button"
+        {...rest}
+        className="grid size-10 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
+    >
+        {children}
+    </button>
+);
 
 const Layout = () => {
-    const { theme, setTheme, resolvedTheme } = useTheme();
-    const { user, logout } = useAuth();
+    const { theme, setTheme, resolvedTheme, motionEnabled, setMotionEnabled, accent, setAccent } = useTheme();
+    const design = currentDesign();
+    const { user, token, logout } = useAuth();
     const location = useLocation();
+    const navigationType = useNavigationType();
 
-    const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-    const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+    const [drawerPath, setDrawerPath] = useState<string | null>(null);
+    const isMobileMenuOpen = drawerPath === location.pathname;
+    const closeDrawer = () => setDrawerPath(null);
+    const menuButtonRef = useRef<HTMLButtonElement>(null);
+    const drawerRef = useRef<HTMLDivElement>(null);
 
-    // Nav count badges (pending submissions + unresolved reports). Both endpoints auto-scope: mods get the
-    // global queue counts, regular users get their own. React-query backed, so they refetch on navigation
-    // (invalidated below on route change) and immediately after actions like approve/resolve (handlers call
-    // invalidateNavBadges).
+    useEffect(() => {
+        if (navigationType !== 'POP') window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+    }, [location.pathname, navigationType]);
+
+    useEffect(() => {
+        if (!isMobileMenuOpen) return;
+        const drawer = drawerRef.current;
+        drawer?.querySelector<HTMLElement>('button, a[href]')?.focus();
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                setDrawerPath(null);
+                return;
+            }
+            if (e.key !== 'Tab' || !drawer) return;
+            const items = Array.from(drawer.querySelectorAll<HTMLElement>('button:not([disabled]), a[href]'));
+            if (items.length === 0) return;
+            const first = items[0];
+            const last = items[items.length - 1];
+            if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first.focus();
+            }
+        };
+        document.addEventListener('keydown', onKeyDown);
+        const menuButton = menuButtonRef.current;
+        return () => {
+            document.removeEventListener('keydown', onKeyDown);
+            if (menuButton && menuButton.getClientRects().length > 0) menuButton.focus({ preventScroll: true });
+        };
+    }, [isMobileMenuOpen]);
+
     const { pendingCount, reportCount } = useNavBadges();
     const queryClient = useQueryClient();
     useEffect(() => { invalidateNavBadges(queryClient); }, [location.pathname, queryClient]);
 
-    const navBadge = pendingCount > 0 ? (
-        <span className="ml-auto px-1.5 py-0.5 rounded-full text-[10px] font-bold leading-none bg-primary text-primary-foreground">
-            {pendingCount > 99 ? '99+' : pendingCount}
-        </span>
-    ) : null;
-
-    const reportBadge = reportCount > 0 ? (
-        <span className="ml-auto px-1.5 py-0.5 rounded-full text-[10px] font-bold leading-none bg-red-500 text-white">
-            {reportCount > 99 ? '99+' : reportCount}
-        </span>
-    ) : null;
-
-    const isActive = (path: string) => location.pathname === path;
-
     const handleLogout = () => {
         logout();
-        window.location.href = "/";
+        window.location.assign('/');
     };
 
     const appTitle = getEnv('VITE_APP_TITLE') || 'Waifu API';
-    const docsUrl = getEnv('VITE_DOCS_URL');
     const contactEmail = getEnv('VITE_CONTACT_EMAIL');
     const discordServerUrl = getEnv('VITE_DISCORD_SERVER_URL');
-    const statusUrl = getEnv('VITE_STATUS_URL');
-    const githubUrl = getEnv('VITE_GITHUB_URL');
-    const tosUrl = getEnv('VITE_TOS_URL');
     const appVersion = getEnv('VITE_APP_VERSION');
-    const showContact = !!contactEmail || !!discordServerUrl;
+    const showContact = !!contactEmail || !!safeExternalUrl(discordServerUrl);
 
-    const navItems = [
-        { name: 'Home', path: '/', icon: Home },
-        { name: 'Gallery', path: '/gallery', icon: ImageIcon },
-        { name: 'Albums', path: '/albums', icon: Library },
-        { name: 'Tags', path: '/tags', icon: TagIcon },
-        { name: 'Artists', path: '/artists', icon: Palette },
+    const tabs: NavEntry[] = [
+        { key: 'home', to: '/', label: 'Home', icon: Home },
+        { key: 'gallery', to: '/gallery', label: 'Gallery', icon: ImageIcon },
+        { key: 'albums', to: '/albums', label: 'Albums', icon: Library },
+        { key: 'tags', to: '/tags', label: 'Tags', icon: TagIcon },
+        { key: 'artists', to: '/artists', label: 'Artists', icon: Palette },
+        { key: 'upload', to: '/upload', label: 'Upload', icon: UploadIcon },
     ];
+
+    const footerLinks: FooterLink[] = [
+        { key: 'docs', href: getEnv('VITE_DOCS_URL'), label: 'Documentation' },
+        { key: 'github', href: getEnv('VITE_GITHUB_URL'), label: 'Source code' },
+        { key: 'status', href: getEnv('VITE_STATUS_URL'), label: 'Status' },
+        { key: 'tos', href: getEnv('VITE_TOS_URL'), label: 'Terms of Service' },
+        { key: 'imprint', to: '/imprint', label: 'Imprint' },
+        { key: 'privacy', to: '/privacy', label: 'Privacy' },
+        ...(showContact ? [{ key: 'contact', to: '/contact', label: 'Contact' }] : []),
+    ].filter((link) => link.to || !!safeExternalUrl(link.href));
 
     const isModOrAdmin = user && (user.role === Role.Moderator || user.role === Role.Admin);
     const isAdmin = user && user.role === Role.Admin;
-    // Banner management role is configured (and enforced) by the backend, Moderator+ by default.
     const { canManageBanner } = usePermissions();
 
+    const renderFooterLink = (link: FooterLink, className: string, onClick?: () => void) => link.href ? (
+        <SafeExternalLink key={link.key} href={link.href} trusted onClick={onClick} className={className}>
+            {link.label}
+        </SafeExternalLink>
+    ) : (
+        <Link key={link.key} to={link.to!} onClick={onClick} aria-current={location.pathname === link.to ? 'page' : undefined} className={className}>
+            {link.label}
+        </Link>
+    );
+
     return (
-        <div className="h-screen bg-background text-foreground flex flex-col overflow-hidden">
+        <div className="min-h-dvh bg-canvas text-foreground">
+            <a
+                href="#main-content"
+                onClick={(e) => {
+                    e.preventDefault();
+                    document.getElementById('main-content')?.focus();
+                }}
+                className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-200 focus:rounded-full focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:font-bold focus:text-primary-foreground focus:shadow-float"
+            >
+                Skip to content
+            </a>
             <GlobalErrorHandler />
 
-
-            {/* 2. MAIN LAYOUT */}
-            <div className="flex flex-1 min-h-0 overflow-hidden relative">
-
-                {/* DESKTOP SIDEBAR - Cleaned up */}
-                <aside
-                    className={`hidden lg:flex flex-col border-r border-border bg-card transition-all duration-300 ease-in-out ${
-                        isSidebarCollapsed ? 'w-20' : 'w-64'
-                    }`}
-                >
-                    <nav className="flex-1 p-4 space-y-1.5 overflow-y-auto">
-                        {!isSidebarCollapsed && (
-                            <p className="px-3 pt-1 pb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground/60 select-none">
-                                Browse
-                            </p>
-                        )}
-
-                        {navItems.map((item) => (
-                            <Link
-                                key={item.path}
-                                to={item.path}
-                                className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all group relative overflow-hidden ${
-                                    isActive(item.path)
-                                        ? 'bg-primary text-primary-foreground font-bold shadow-md'
-                                        : 'text-muted-foreground hover:bg-secondary hover:text-foreground motion-safe:hover:translate-x-0.5'
-                                } ${isSidebarCollapsed ? 'justify-center' : ''}`}
-                                title={isSidebarCollapsed ? item.name : ''}
-                            >
-                                <item.icon size={22} className="relative z-10 shrink-0" />
-                                {!isSidebarCollapsed && <span className="relative z-10 whitespace-nowrap">{item.name}</span>}
-                            </Link>
-                        ))}
-
-                        <div className="!my-4 border-t border-border mx-2 opacity-50"></div>
-
-                        {!isSidebarCollapsed && (
-                            <p className="px-3 pb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground/60 select-none">
-                                Actions
-                            </p>
-                        )}
-
-                        <Link
-                            to="/upload"
-                            className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all ${
-                                isActive('/upload')
-                                    ? 'bg-secondary text-foreground font-bold shadow-sm'
-                                    : 'bg-secondary/30 text-foreground hover:bg-secondary font-medium motion-safe:hover:translate-x-0.5'
-                            } ${isSidebarCollapsed ? 'justify-center' : ''}`}
-                        >
-                            <UploadIcon size={22} className="shrink-0" />
-                            {!isSidebarCollapsed && <span>Upload</span>}
-                        </Link>
-
-                        {/* Dynamic Links Section - always rendered (imprint/privacy are permanent) */}
-                        {(
-                            <>
-                                <div className="!my-4 border-t border-border mx-2 opacity-50"></div>
-
-                                {!isSidebarCollapsed && (
-                                    <p className="px-3 pb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground/60 select-none">
-                                        More
-                                    </p>
-                                )}
-
-                                {docsUrl && (
-                                    <a
-                                        href={docsUrl}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all text-muted-foreground hover:bg-secondary hover:text-foreground ${isSidebarCollapsed ? 'justify-center' : ''}`}
-                                        title={isSidebarCollapsed ? 'Documentation' : ''}
-                                    >
-                                        <Book size={22} className="shrink-0" />
-                                        {!isSidebarCollapsed && <span>Documentation</span>}
-                                    </a>
-                                )}
-
-                                {githubUrl && (
-                                    <a
-                                        href={githubUrl}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all text-muted-foreground hover:bg-secondary hover:text-foreground ${isSidebarCollapsed ? 'justify-center' : ''}`}
-                                        title={isSidebarCollapsed ? 'GitHub' : ''}
-                                    >
-                                        <Github size={22} className="shrink-0" />
-                                        {!isSidebarCollapsed && <span>GitHub</span>}
-                                    </a>
-                                )}
-
-                                {statusUrl && (
-                                    <a
-                                        href={statusUrl}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all text-muted-foreground hover:bg-secondary hover:text-foreground ${isSidebarCollapsed ? 'justify-center' : ''}`}
-                                        title={isSidebarCollapsed ? 'Status' : ''}
-                                    >
-                                        <Activity size={22} className="shrink-0" />
-                                        {!isSidebarCollapsed && <span>Status</span>}
-                                    </a>
-                                )}
-
-                                {tosUrl && (
-                                    <a
-                                        href={tosUrl}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all text-muted-foreground hover:bg-secondary hover:text-foreground ${isSidebarCollapsed ? 'justify-center' : ''}`}
-                                        title={isSidebarCollapsed ? 'Terms of Service' : ''}
-                                    >
-                                        <FileText size={22} className="shrink-0" />
-                                        {!isSidebarCollapsed && <span>Terms of Service</span>}
-                                    </a>
-                                )}
-
-                                <Link
-                                    to="/imprint"
-                                    className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all ${
-                                        isActive('/imprint')
-                                            ? 'bg-secondary text-foreground font-bold shadow-sm'
-                                            : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
-                                    } ${isSidebarCollapsed ? 'justify-center' : ''}`}
-                                    title={isSidebarCollapsed ? 'Imprint' : ''}
-                                >
-                                    <Scale size={22} className="shrink-0" />
-                                    {!isSidebarCollapsed && <span>Imprint</span>}
-                                </Link>
-
-                                <Link
-                                    to="/privacy"
-                                    className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all ${
-                                        isActive('/privacy')
-                                            ? 'bg-secondary text-foreground font-bold shadow-sm'
-                                            : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
-                                    } ${isSidebarCollapsed ? 'justify-center' : ''}`}
-                                    title={isSidebarCollapsed ? 'Privacy' : ''}
-                                >
-                                    <ShieldCheck size={22} className="shrink-0" />
-                                    {!isSidebarCollapsed && <span>Privacy</span>}
-                                </Link>
-
-                                {showContact && (
-                                    <Link
-                                        to="/contact"
-                                        className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all ${
-                                            isActive('/contact')
-                                                ? 'bg-secondary text-foreground font-bold shadow-sm'
-                                                : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
-                                        } ${isSidebarCollapsed ? 'justify-center' : ''}`}
-                                        title={isSidebarCollapsed ? 'Contact' : ''}
-                                    >
-                                        <Mail size={22} className="shrink-0" />
-                                        {!isSidebarCollapsed && <span>Contact</span>}
-                                    </Link>
-                                )}
-                            </>
-                        )}
-                    </nav>
-
-                    <div className="p-4 border-t border-border mt-auto">
-                        {appVersion && (
-                            <p className="text-center text-[11px] font-medium text-muted-foreground/60 mb-2 select-none">
-                                {isSidebarCollapsed ? `v${appVersion}` : `Version ${appVersion}`}
-                            </p>
-                        )}
+            <header className="sticky top-0 z-40 bg-canvas/88 backdrop-blur-md lg:static lg:bg-transparent lg:backdrop-blur-none">
+                <div className="mx-auto flex h-16 max-w-[100rem] items-center justify-between gap-3 px-3 sm:px-5 lg:h-[4.75rem] lg:px-8">
+                    <div className="flex min-w-0 items-center gap-1.5">
                         <button
-                            aria-label={isSidebarCollapsed ? 'Expand navigation menu' : 'Collapse navigation menu'}
-                            onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-                            className="w-full flex items-center justify-center p-2 rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                            ref={menuButtonRef}
+                            type="button"
+                            aria-label="Open navigation menu"
+                            aria-expanded={isMobileMenuOpen}
+                            aria-controls="mobile-navigation"
+                            className="grid size-10 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-card hover:text-foreground lg:hidden"
+                            onClick={() => setDrawerPath(isMobileMenuOpen ? null : location.pathname)}
                         >
-                            {isSidebarCollapsed ? <ChevronRight size={20} /> : <PanelLeft size={20} />}
+                            <Menu size={22} aria-hidden="true" />
                         </button>
+                        <Brand title={appTitle} compact />
                     </div>
-                </aside>
 
-                {/* MOBILE DRAWER */}
-                {isMobileMenuOpen && (
-                    <div className="fixed inset-0 z-50 lg:hidden">
-                        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setIsMobileMenuOpen(false)} />
-                        <div className="absolute inset-y-0 left-0 w-full sm:w-80 bg-background border-r border-border shadow-2xl flex flex-col p-4 animate-in slide-in-from-left">
-                            <div className="flex justify-between items-center mb-8">
-                                <span className="font-bold text-xl">Menu</span>
-                                <button aria-label="Close navigation menu" onClick={() => setIsMobileMenuOpen(false)} className="p-2 hover:bg-secondary rounded-lg"><X size={24} /></button>
+                    <div className="flex items-center gap-1.5 sm:gap-2">
+                        <Dropdown
+                            width="w-[17rem]"
+                            label="Change color theme, accent, design and effects"
+                            trigger={
+                                <DropdownTrigger className="grid size-10 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-card hover:text-foreground">
+                                    {resolvedTheme === 'light' ? <Sun size={19} aria-hidden="true" /> : <Moon size={19} aria-hidden="true" />}
+                                </DropdownTrigger>
+                            }
+                        >
+                            <div role="group" aria-label="Color theme">
+                                <DropdownLabel>Color theme</DropdownLabel>
+                                <DropdownItem onClick={() => setTheme('light')} active={theme === 'light'} icon={<Sun size={16} />}>Light</DropdownItem>
+                                <DropdownItem onClick={() => setTheme('dark')} active={theme === 'dark'} icon={<Moon size={16} />}>Dark</DropdownItem>
+                                <DropdownItem onClick={() => setTheme('system')} active={theme === 'system'} icon={<Monitor size={16} />}>System</DropdownItem>
                             </div>
-                            <nav className="space-y-2 flex-1 overflow-y-auto">
-                                <p className="px-4 pt-1 pb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground/60">
-                                    Browse
-                                </p>
-                                {navItems.map((item) => (
-                                    <Link
-                                        key={item.path}
-                                        to={item.path}
-                                        onClick={() => setIsMobileMenuOpen(false)}
-                                        className={`flex items-center gap-3 px-4 py-3 rounded-xl font-medium ${
-                                            isActive(item.path) ? 'bg-secondary text-foreground' : 'text-muted-foreground'
-                                        }`}
-                                    >
-                                        <item.icon size={20} /> {item.name}
-                                    </Link>
+                            <DropdownSeparator />
+                            <div role="group" aria-label="Accent color">
+                                <DropdownLabel>Accent color</DropdownLabel>
+                                <div role="none" className="flex flex-wrap gap-2 px-3 pb-2 pt-1">
+                                    {ACCENTS.map(({ id, label, swatch }) => (
+                                        <DropdownSwatch key={id} color={swatch} label={label} active={accent === id} onClick={() => setAccent(id)} />
+                                    ))}
+                                </div>
+                            </div>
+                            <DropdownSeparator />
+                            <div role="group" aria-label="Design">
+                                <DropdownLabel>Design</DropdownLabel>
+                                {DESIGNS.map(({ id, label }) => (
+                                    <DropdownItem key={id} onClick={() => switchDesign(id)} active={design === id} icon={id === 'collector' ? <Sparkles size={16} /> : <History size={16} />}>{label}</DropdownItem>
                                 ))}
+                            </div>
+                            <DropdownSeparator />
+                            <div role="group" aria-label="Effects">
+                                <DropdownLabel>Effects</DropdownLabel>
+                                <DropdownItem checkbox onClick={() => setMotionEnabled(!motionEnabled)} active={motionEnabled} icon={<WandSparkles size={16} />}>Animations and effects</DropdownItem>
+                            </div>
+                        </Dropdown>
 
-                                <div className="my-2 border-t border-border opacity-50"></div>
+                        {user ? (
+                            <Dropdown
+                                width="w-64"
+                                label={`Account menu (${user.name})`}
+                                trigger={
+                                    <DropdownTrigger className="flex max-w-[14rem] items-center gap-2.5 rounded-full bg-card py-1 pl-1 pr-3 shadow-card transition-colors hover:bg-secondary dark:ring-1 dark:ring-white/6">
+                                        {user.avatarUrl ? (
+                                            <img src={user.avatarUrl} alt="" referrerPolicy="no-referrer" className="size-8 shrink-0 rounded-full object-cover" />
+                                        ) : (
+                                            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-brand-soft text-brand-ink" aria-hidden="true">
+                                                <UserIcon size={16} />
+                                            </span>
+                                        )}
+                                        <span className="hidden min-w-0 text-left leading-tight md:block">
+                                            <span className="block max-w-[8rem] truncate text-sm font-bold">{user.name}</span>
+                                            <span className="block text-xs text-muted-foreground">{roleLabel(user.role)}</span>
+                                        </span>
+                                        <ChevronDown size={15} aria-hidden="true" className="shrink-0 text-muted-foreground" />
+                                    </DropdownTrigger>
+                                }
+                            >
+                                <div className="border-b border-border px-3 pb-2.5 pt-1.5 md:hidden">
+                                    <p className="truncate font-bold">{user.name}</p>
+                                    <p className="text-xs text-muted-foreground">{roleLabel(user.role)}</p>
+                                </div>
 
-                                <p className="px-4 pb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground/60">
-                                    Actions
-                                </p>
-                                <Link
-                                    to="/upload"
-                                    onClick={() => setIsMobileMenuOpen(false)}
-                                    className={`flex items-center gap-3 px-4 py-3 rounded-xl font-medium ${
-                                        isActive('/upload') ? 'bg-secondary text-foreground' : 'text-muted-foreground'
-                                    }`}
-                                >
-                                    <UploadIcon size={20} /> Upload
-                                </Link>
-
-                                {(
+                                <DropdownLabel>Your collection</DropdownLabel>
+                                <DropdownItem to="/upload" icon={<UploadIcon size={16} />}>Upload Image</DropdownItem>
+                                <DropdownItem to="/albums" icon={<Library size={16} />}>My Albums</DropdownItem>
+                                <DropdownItem to="/api-keys" icon={<Key size={16} />}>API Keys</DropdownItem>
+                                {!isModOrAdmin && (
                                     <>
-                                        <div className="my-2 border-t border-border opacity-50"></div>
+                                        <DropdownItem to="/review" icon={<GitPullRequest size={16} />}>My Submissions<CountBadge count={pendingCount} tone="brand" /></DropdownItem>
+                                        <DropdownItem to="/my-reports" icon={<Flag size={16} />}>My Reports</DropdownItem>
+                                    </>
+                                )}
 
-                                        <p className="px-4 pb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground/60">
-                                            More
-                                        </p>
-
-                                        {docsUrl && (
-                                            <a
-                                                href={docsUrl}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="flex items-center gap-3 px-4 py-3 rounded-xl font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
-                                            >
-                                                <Book size={20} /> Documentation
-                                            </a>
+                                {(isModOrAdmin || canManageBanner) && (
+                                    <>
+                                        <DropdownSeparator />
+                                        <DropdownLabel>Administration</DropdownLabel>
+                                        {canManageBanner && (
+                                            <DropdownItem to="/site-banner" icon={<Megaphone size={16} />}>Site Banner</DropdownItem>
                                         )}
-
-                                        {githubUrl && (
-                                            <a
-                                                href={githubUrl}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="flex items-center gap-3 px-4 py-3 rounded-xl font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
-                                            >
-                                                <Github size={20} /> GitHub
-                                            </a>
+                                        {isModOrAdmin && (
+                                            <>
+                                                <DropdownItem to="/review" icon={<GitPullRequest size={16} />}>Review<CountBadge count={pendingCount} tone="brand" /></DropdownItem>
+                                                <DropdownItem to="/reports" icon={<Flag size={16} />}>Reports<CountBadge count={reportCount} tone="danger" /></DropdownItem>
+                                            </>
                                         )}
-
-                                        {statusUrl && (
-                                            <a
-                                                href={statusUrl}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="flex items-center gap-3 px-4 py-3 rounded-xl font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
-                                            >
-                                                <Activity size={20} /> Status
-                                            </a>
-                                        )}
-
-                                        {tosUrl && (
-                                            <a
-                                                href={tosUrl}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="flex items-center gap-3 px-4 py-3 rounded-xl font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
-                                            >
-                                                <FileText size={20} /> Terms of Service
-                                            </a>
-                                        )}
-
-                                        <Link
-                                            to="/imprint"
-                                            onClick={() => setIsMobileMenuOpen(false)}
-                                            className={`flex items-center gap-3 px-4 py-3 rounded-xl font-medium ${
-                                                isActive('/imprint') ? 'bg-secondary text-foreground' : 'text-muted-foreground'
-                                            }`}
-                                        >
-                                            <Scale size={20} /> Imprint
-                                        </Link>
-
-                                        <Link
-                                            to="/privacy"
-                                            onClick={() => setIsMobileMenuOpen(false)}
-                                            className={`flex items-center gap-3 px-4 py-3 rounded-xl font-medium ${
-                                                isActive('/privacy') ? 'bg-secondary text-foreground' : 'text-muted-foreground'
-                                            }`}
-                                        >
-                                            <ShieldCheck size={20} /> Privacy
-                                        </Link>
-
-                                        {showContact && (
-                                            <Link
-                                                to="/contact"
-                                                onClick={() => setIsMobileMenuOpen(false)}
-                                                className={`flex items-center gap-3 px-4 py-3 rounded-xl font-medium ${
-                                                    isActive('/contact') ? 'bg-secondary text-foreground' : 'text-muted-foreground'
-                                                }`}
-                                            >
-                                                <Mail size={20} /> Contact
-                                            </Link>
+                                        {isAdmin && (
+                                            <>
+                                                <DropdownItem to="/users" icon={<UsersIcon size={16} />}>User Management</DropdownItem>
+                                                <DropdownItem to="/stats" icon={<BarChart size={16} />}>Statistics</DropdownItem>
+                                                <DropdownItem to="/storage-diff" icon={<HardDrive size={16} />}>Storage Diff</DropdownItem>
+                                            </>
                                         )}
                                     </>
                                 )}
-                            </nav>
-                        </div>
+
+                                <DropdownSeparator />
+                                <DropdownItem onClick={handleLogout} icon={<LogOut size={16} />} danger>Log out</DropdownItem>
+                            </Dropdown>
+                        ) : token ? (
+                            <div className="size-9 animate-pulse rounded-full bg-card" aria-hidden="true" />
+                        ) : (
+                            <Link to="/login" className="btn btn-primary btn-sm px-5">
+                                Login
+                            </Link>
+                        )}
                     </div>
-                )}
+                </div>
+            </header>
 
-                {/* CONTENT AREA */}
-                <main className="flex-1 overflow-x-hidden overflow-y-auto bg-muted/20 relative">
-                <header className="relative z-40 w-full h-16 border-b border-border/80 bg-card/95 supports-[backdrop-filter]:bg-card/80 backdrop-blur flex items-center justify-between px-4 lg:px-6 shadow-sm">
-                                <div className="flex items-center gap-4">
-                                    <button
-                                        aria-label="Open navigation menu"
-                                        aria-expanded={isMobileMenuOpen}
-                                        className="lg:hidden p-2 rounded-md hover:bg-secondary"
-                                        onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-                                    >
-                                        <Menu size={24} />
-                                    </button>
+            {isMobileMenuOpen && (
+                <div className="fixed inset-0 z-50 lg:hidden">
+                    <div className="absolute inset-0 bg-zinc-950/55 backdrop-blur-[2px] animate-in fade-in" aria-hidden="true" onClick={closeDrawer} />
+                    <div
+                        ref={drawerRef}
+                        id="mobile-navigation"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-label="Navigation menu"
+                        className="absolute inset-y-0 left-0 flex w-[min(20rem,88vw)] flex-col rounded-r-[var(--radius-sheet)] bg-background shadow-float animate-in slide-in-from-left duration-300"
+                    >
+                        <div className="flex h-16 shrink-0 items-center justify-between px-4">
+                            <span className="truncate text-lg font-black">{appTitle}</span>
+                            <HeaderIconButton aria-label="Close navigation menu" onClick={closeDrawer}>
+                                <X size={20} aria-hidden="true" />
+                            </HeaderIconButton>
+                        </div>
+                        <nav aria-label="Main navigation" className="flex-1 space-y-1 overflow-y-auto overscroll-contain px-3 py-2">
+                            {tabs.map(({ key, to, label, icon: Icon }) => (
+                                <Link key={key} to={to} onClick={closeDrawer} aria-current={isActive(location.pathname, to) ? 'page' : undefined} className="nav-item">
+                                    <Icon size={20} strokeWidth={2} aria-hidden="true" className="shrink-0" />
+                                    <span className="truncate">{label}</span>
+                                </Link>
+                            ))}
+                            <p className="nav-group" aria-hidden="true">About</p>
+                            {footerLinks.map((link) => renderFooterLink(link, 'nav-item', closeDrawer))}
+                        </nav>
+                        {appVersion && <p className="px-6 py-4 text-xs text-muted-foreground tabular">Version {appVersion}</p>}
+                    </div>
+                </div>
+            )}
 
-                                    <Link to="/" aria-label={`${appTitle} home`} className="flex items-center gap-2.5 sm:gap-3 group">
-                                        <img
-                                            src="/logo.png?v=20261024-logo-v2"
-                                            alt={`${appTitle} logo`}
-                                            width={44}
-                                            height={44}
-                                            className="w-11 h-11 sm:w-12 sm:h-12 shrink-0 rounded-xl object-cover ring-1 ring-border shadow-sm motion-safe:group-hover:scale-105 motion-safe:transition-transform"
-                                        />
-                                        <span className="text-xl font-bold tracking-tight hidden sm:block">{appTitle}</span>
-                                    </Link>
-                                </div>
+            <div className="mx-auto flex max-w-[100rem] items-start px-2 pb-4 sm:px-4 lg:px-8 lg:pb-8">
+                <nav aria-label="Main navigation" className="sticky top-8 z-10 -mr-px hidden w-[10.5rem] shrink-0 flex-col gap-1.5 pt-10 lg:flex">
+                    {tabs.map(({ key, to, label, icon: Icon }) => (
+                        <Link key={key} to={to} aria-current={isActive(location.pathname, to) ? 'page' : undefined} className="index-tab">
+                            <Icon size={19} strokeWidth={2.1} aria-hidden="true" className="shrink-0" />
+                            <span className="truncate">{label}</span>
+                        </Link>
+                    ))}
+                </nav>
 
-                                <div className="flex items-center gap-2 sm:gap-4">
-                                    {/* Theme Toggle Dropdown */}
-                                    <Dropdown
-                                        width="w-36"
-                                        trigger={
-                                            <button className="p-2.5 rounded-full hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
-                                                {resolvedTheme === 'light' ? <Sun size={20} /> : <Moon size={20} />}
-                                            </button>
-                                        }
-                                    >
-                                        <DropdownItem onClick={() => setTheme('light')} active={theme === 'light'} icon={<Sun size={16} />}>Light</DropdownItem>
-                                        <DropdownItem onClick={() => setTheme('dark')} active={theme === 'dark'} icon={<Moon size={16} />}>Dark</DropdownItem>
-                                        <DropdownItem onClick={() => setTheme('system')} active={theme === 'system'} icon={<Monitor size={16} />}>System</DropdownItem>
-                                    </Dropdown>
-
-                                    {user ? (
-                                        <Dropdown
-                                            width="w-64"
-                                            padding="p-0"
-                                            trigger={
-                                                <button className="flex items-center gap-3 pl-2 pr-3 py-1.5 rounded-full hover:bg-secondary transition-colors border border-transparent hover:border-border max-w-[200px]">
-                                                    {user.avatarUrl ? (
-                                                        <img src={user.avatarUrl} alt={user.name} className="w-8 h-8 shrink-0 rounded-full object-cover border border-primary/20" />
-                                                    ) : (
-                                                        <div className="w-8 h-8 shrink-0 rounded-full bg-primary/10 flex items-center justify-center text-primary border border-primary/20">
-                                                            <UserIcon size={16} />
-                                                        </div>
-                                                    )}
-                                                    <div className="text-right hidden md:block overflow-hidden">
-                                                        <p className="text-xs font-bold leading-none truncate max-w-[100px]">{user.name}</p>
-                                                        <p className="text-[10px] text-muted-foreground mt-0.5 uppercase tracking-wide font-semibold">
-                                                            {user.role === Role.Admin ? 'Admin' : user.role === Role.Moderator ? 'Mod' : 'User'}
-                                                        </p>
-                                                    </div>
-                                                    <ChevronDown size={14} className="text-muted-foreground shrink-0" />
-                                                </button>
-                                            }
-                                        >
-                                            {/* Header Mobile */}
-                                            <div className="px-4 py-3 border-b border-border md:hidden bg-secondary/30">
-                                                <p className="font-bold truncate">{user.name}</p>
-                                                <p className="text-xs text-muted-foreground">{user.role === Role.Admin ? 'Administrator' : 'Member'}</p>
-                                            </div>
-
-                                            <div className="p-1">
-                                                <DropdownLabel>Personal</DropdownLabel>
-                                                <Link to="/upload"><DropdownItem icon={<UploadIcon size={16} />}>Upload Image</DropdownItem></Link>
-                                                <Link to="/albums"><DropdownItem icon={<Library size={16} />}>My Albums</DropdownItem></Link>
-                                                <Link to="/api-keys"><DropdownItem icon={<Key size={16} />}>API Keys</DropdownItem></Link>
-                                                {!isModOrAdmin && (
-                                                    <>
-                                                        <Link to="/review"><DropdownItem icon={<GitPullRequest size={16} />}>My Submissions{navBadge}</DropdownItem></Link>
-                                                        <Link to="/my-reports"><DropdownItem icon={<Flag size={16} />}>My Reports</DropdownItem></Link>
-                                                    </>
-                                                )}
-
-                                                {(isModOrAdmin || canManageBanner) && (
-                                                    <>
-                                                        <DropdownSeparator />
-                                                        <DropdownLabel>Administration</DropdownLabel>
-                                                        {canManageBanner && (
-                                                            <Link to="/site-banner"><DropdownItem icon={<Megaphone size={16} className="text-primary" />}>Site Banner</DropdownItem></Link>
-                                                        )}
-                                                        {isModOrAdmin && (
-                                                            <>
-                                                                <Link to="/review"><DropdownItem icon={<GitPullRequest size={16} className="text-orange-500" />}>Review{navBadge}</DropdownItem></Link>
-                                                                <Link to="/reports"><DropdownItem icon={<Flag size={16} className="text-red-500" />}>Reports{reportBadge}</DropdownItem></Link>
-                                                            </>
-                                                        )}
-                                                        {isAdmin && (
-                                                            <>
-                                                                <Link to="/users"><DropdownItem icon={<UsersIcon size={16} className="text-blue-500" />}>User Management</DropdownItem></Link>
-                                                                <Link to="/stats"><DropdownItem icon={<BarChart size={16} className="text-purple-500" />}>Statistics</DropdownItem></Link>
-                                                                <Link to="/storage-diff"><DropdownItem icon={<HardDrive size={16} className="text-emerald-500" />}>Storage Diff</DropdownItem></Link>
-                                                            </>
-                                                        )}
-                                                    </>
-                                                )}
-
-                                                <DropdownSeparator />
-                                                <DropdownItem onClick={handleLogout} icon={<LogOut size={16} />} danger>Log out</DropdownItem>
-                                            </div>
-                                        </Dropdown>
-                                    ) : (
-                                        <Link
-                                            to="/login"
-                                            className="px-5 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-bold hover:opacity-90 transition-all shadow-sm"
-                                        >
-                                            Login
-                                        </Link>
-                                    )}
-                                </div>
-                            </header>
-                    <SiteBanner />
-                    <Outlet />
+                <main
+                    id="main-content"
+                    tabIndex={-1}
+                    className="relative min-w-0 flex-1 rounded-[1.25rem] bg-background shadow-sheet outline-hidden ring-1 ring-border/70 sm:rounded-[var(--radius-sheet)] dark:ring-white/5"
+                >
+                    <div className="min-h-[calc(100dvh-4rem)] lg:min-h-[calc(100dvh-4.75rem)]">
+                        <SessionErrorBanner />
+                        <SiteBanner />
+                        <ErrorBoundary resetKey={location.pathname}>
+                            <Suspense fallback={<PageLoader />}>
+                                <Outlet />
+                            </Suspense>
+                        </ErrorBoundary>
+                    </div>
+                    <footer className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-dashed border-border px-5 py-5 text-[0.8125rem] text-muted-foreground sm:px-7 lg:px-10">
+                        {footerLinks.map((link) => renderFooterLink(link, 'font-bold transition-colors hover:text-foreground'))}
+                        {appVersion && <span className="ml-auto tabular">Version {appVersion}</span>}
+                    </footer>
                 </main>
             </div>
         </div>

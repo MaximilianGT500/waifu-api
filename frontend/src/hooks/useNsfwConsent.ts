@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { readLocal, writeLocal } from '../utils/storage';
 
 const NSFW_CONSENT_KEY = 'nsfw-consent';
 
@@ -6,13 +7,13 @@ export const useNsfwConsent = (shouldCheck: boolean = true) => {
     const [showWarning, setShowWarning] = useState(false);
 
     useEffect(() => {
-        if (shouldCheck && !localStorage.getItem(NSFW_CONSENT_KEY)) {
+        if (shouldCheck && !readLocal(NSFW_CONSENT_KEY)) {
             setShowWarning(true);
         }
     }, [shouldCheck]);
 
     const grantConsent = useCallback(() => {
-        localStorage.setItem(NSFW_CONSENT_KEY, 'true');
+        writeLocal(NSFW_CONSENT_KEY, 'true');
         setShowWarning(false);
     }, []);
 
@@ -21,7 +22,7 @@ export const useNsfwConsent = (shouldCheck: boolean = true) => {
     }, []);
 
     const hasConsent = useCallback(() => {
-        return !!localStorage.getItem(NSFW_CONSENT_KEY);
+        return !!readLocal(NSFW_CONSENT_KEY);
     }, []);
 
     return {

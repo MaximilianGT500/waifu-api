@@ -1,4 +1,4 @@
-﻿import { useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import api from '../services/api';
 import { ImageDto, PaginatedList, NsfwMode, AnimatedMode, Orientation, ImageOrderBy, ReviewStatusFilter } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -30,8 +30,6 @@ export interface ImageFilters {
 
 export const useImages = (filters: ImageFilters) => {
   const { user } = useAuth();
-  // Show a regular user their own pending tags/artists ON each image (the gallery list itself stays accepted-only,
-  // so pending uploads aren't injected). Moderators drive child visibility via reviewStatus, so it isn't forced on them.
   const includeMyPendingChildren = user && !canModerate(user) ? true : undefined;
   const isAlbumRequest = !!filters.albumId;
   const isEnabled = filters.enabled !== undefined ? filters.enabled : true;

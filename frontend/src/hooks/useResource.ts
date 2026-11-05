@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, Dispatch, SetStateAction, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useState, useEffect, useCallback, useEffectEvent, Dispatch, SetStateAction, useRef } from 'react';
+import { useSearchParams } from 'react-router';
 import api from '../services/api';
 import { PaginatedList } from '../types';
 import { useNotification } from '../context/NotificationContext';
@@ -14,8 +14,8 @@ export interface UseResourceResult<T> {
     setSearch: (value: string) => void;
     searchType: 'name' | 'id';
     setSearchType: (type: 'name' | 'id') => void;
-    createItem: (data: any, successMessage?: string) => Promise<boolean>;
-    updateItem: (id: number | string, data: any, successMessage?: string) => Promise<boolean>;
+    createItem: (data: unknown, successMessage?: string) => Promise<boolean>;
+    updateItem: (id: number | string, data: unknown, successMessage?: string) => Promise<boolean>;
     deleteItem: (id: number | string, successMessage?: string) => Promise<boolean>;
     refresh: () => Promise<void>;
 }
@@ -23,7 +23,6 @@ export interface UseResourceResult<T> {
 export function useResource<T extends { id: number | string }>(
     endpoint: string,
     pageSize: number = 30,
-    initialParams: Record<string, any> = {}
 ): UseResourceResult<T> {
     const { showNotification } = useNotification();
     const [searchParams, setSearchParams] = useSearchParams();
@@ -33,18 +32,13 @@ export function useResource<T extends { id: number | string }>(
     const [page, setPage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
 
-    // Initialize search from URL query param if present
     const [search, _setSearch] = useState(searchParams.get('name') || searchParams.get('includedIds') || '');
     const [searchType, _setSearchType] = useState<'name' | 'id'>(searchParams.get('includedIds') ? 'id' : 'name');
 
-    // Ref to prevent URL from overwriting local state immediately after a user action
     const ignoreUrlSync = useRef(false);
 
-    // Monotonic request sequence: responses belonging to an older request are
-    // dropped so a slow response can never overwrite newer results.
     const requestSeq = useRef(0);
 
-    // Wrapper for setSearch to handle the sync flag
     const setSearch = (value: string) => {
         if (value !== search) {
             ignoreUrlSync.current = true;
@@ -52,7 +46,6 @@ export function useResource<T extends { id: number | string }>(
         }
     };
 
-    // Wrapper for setSearchType to handle the sync flag
     const setSearchType = (type: 'name' | 'id') => {
         if (type !== searchType) {
             ignoreUrlSync.current = true;
@@ -60,7 +53,6 @@ export function useResource<T extends { id: number | string }>(
         }
     };
 
-    // Custom debounce logic
     const [debouncedSearch, setDebouncedSearch] = useState(search);
 
     useEffect(() => {
@@ -79,7 +71,6 @@ export function useResource<T extends { id: number | string }>(
     }, [search]);
 
     const fetchData = useCallback(async () => {
-        // Prevent loading flicker/requests if searchType is ID but search term is invalid
         if (searchType === 'id' && debouncedSearch && !/^\d+$/.test(debouncedSearch)) {
             return;
         }
@@ -87,7 +78,7 @@ export function useResource<T extends { id: number | string }>(
         const seq = ++requestSeq.current;
         setLoading(true);
         try {
-            const params: any = { page, pageSize, ...initialParams };
+            const params: Record<string, string | number> = { page, pageSize };
 
             if (debouncedSearch) {
                 if (searchType === 'id') {
@@ -100,62 +91,55 @@ export function useResource<T extends { id: number | string }>(
             }
 
             const { data } = await api.get<PaginatedList<T>>(endpoint, { params });
-            if (seq !== requestSeq.current) return; // stale response - drop it
+            if (seq !== requestSeq.current) return;
             setItems(data.items);
             setTotalPages(data.totalPages);
-        } catch (error) {
-            console.error(error);
+        } catch {
+            return;
         } finally {
-            // Only clear loading if this request is still the latest one.
             if (seq === requestSeq.current) {
                 setLoading(false);
             }
         }
-    }, [endpoint, page, pageSize, debouncedSearch, searchType, JSON.stringify(initialParams)]);
+    }, [endpoint, page, pageSize, debouncedSearch, searchType]);
 
     useEffect(() => {
         setPage(1);
     }, [debouncedSearch, searchType]);
 
-    // Sync URL with debounced search
-    useEffect(() => {
+    const syncUrl = useEffectEvent((value: string, type: 'name' | 'id') => {
         const currentParams = new URLSearchParams(searchParams);
         const currentNameParam = currentParams.get('name') || '';
         const currentIdParam = currentParams.get('includedIds') || '';
 
-        if (debouncedSearch) {
-            if (searchType === 'id') {
-                if (/^\d+$/.test(debouncedSearch)) {
-                    // Only update if actually different to avoid redundant history/loops
-                    if (currentIdParam !== debouncedSearch || currentParams.has('name')) {
-                        currentParams.set('includedIds', debouncedSearch);
-                        currentParams.delete('name');
-                        setSearchParams(currentParams, { replace: true });
-                    }
-                }
-            } else {
-                if (currentNameParam !== debouncedSearch || currentParams.has('includedIds')) {
-                    currentParams.set('name', debouncedSearch);
-                    currentParams.delete('includedIds');
+        if (value) {
+            if (type === 'id') {
+                if (/^\d+$/.test(value) && (currentIdParam !== value || currentParams.has('name'))) {
+                    currentParams.set('includedIds', value);
+                    currentParams.delete('name');
                     setSearchParams(currentParams, { replace: true });
                 }
-            }
-        } else {
-            if (currentNameParam || currentIdParam) {
-                currentParams.delete('name');
+            } else if (currentNameParam !== value || currentParams.has('includedIds')) {
+                currentParams.set('name', value);
                 currentParams.delete('includedIds');
                 setSearchParams(currentParams, { replace: true });
             }
+        } else if (currentNameParam || currentIdParam) {
+            currentParams.delete('name');
+            currentParams.delete('includedIds');
+            setSearchParams(currentParams, { replace: true });
         }
+    });
+
+    useEffect(() => {
+        syncUrl(debouncedSearch, searchType);
     }, [debouncedSearch, searchType]);
 
-    // Sync state with URL (for back/forward navigation)
     const urlName = searchParams.get('name') || '';
     const urlId = searchParams.get('includedIds') || '';
     const urlSearch = urlId || urlName;
 
     useEffect(() => {
-        // If we just updated locally, ignore the stale URL values for one render cycle
         if (ignoreUrlSync.current) {
             ignoreUrlSync.current = false;
             return;
@@ -165,7 +149,6 @@ export function useResource<T extends { id: number | string }>(
             _setSearch(urlSearch);
         }
 
-        // Only switch type if the URL explicitly has a value
         if (urlId && searchType !== 'id') {
             _setSearchType('id');
         } else if (urlName && searchType !== 'name') {
@@ -174,31 +157,27 @@ export function useResource<T extends { id: number | string }>(
     }, [urlSearch, urlId, urlName, searchType, search]);
 
     useEffect(() => {
-        // Skip fetch if invalid ID format
-        if (searchType === 'id' && search && !/^\d+$/.test(search)) {
-            return;
-        }
         fetchData();
-    }, [fetchData, searchType, debouncedSearch]); // Trigger on debouncedSearch, not raw search
+    }, [fetchData]);
 
-    const createItem = async (data: any, successMessage = 'Created successfully') => {
+    const createItem = async (data: unknown, successMessage = 'Created successfully') => {
         try {
             await api.post(endpoint, data);
             showNotification('success', successMessage);
             fetchData();
             return true;
-        } catch (e) {
+        } catch {
             return false;
         }
     };
 
-    const updateItem = async (id: number | string, data: any, successMessage = 'Updated successfully') => {
+    const updateItem = async (id: number | string, data: unknown, successMessage = 'Updated successfully') => {
         try {
             await api.patch(`${endpoint}/${id}`, data);
             showNotification('success', successMessage);
             fetchData();
             return true;
-        } catch (e) {
+        } catch {
             return false;
         }
     };
@@ -209,7 +188,7 @@ export function useResource<T extends { id: number | string }>(
             showNotification('success', successMessage);
             fetchData();
             return true;
-        } catch (e) {
+        } catch {
             return false;
         }
     };

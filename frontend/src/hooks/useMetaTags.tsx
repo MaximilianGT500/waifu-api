@@ -1,4 +1,4 @@
-import { Helmet } from 'react-helmet-async';
+import { useEffect } from 'react';
 import { getEnv } from '../utils/env';
 
 interface MetaTagsProps {
@@ -14,46 +14,48 @@ interface MetaTagsProps {
 
 const defaultDescription = 'The API for your Waifu content. Access thousands of categorized anime illustrations via our robust REST API or browse freely.';
 
-export function MetaTags({
-  title,
-  description,
-  image,
-  imageWidth,
-  imageHeight,
-  url,
-  type = 'website',
-  isNsfw = false,
-}: MetaTagsProps) {
+function setMeta(attribute: 'name' | 'property', key: string, value: string | null) {
+  let element = document.head.querySelector<HTMLMetaElement>(`meta[${attribute}="${key}"]`);
+  if (value === null) {
+    element?.remove();
+    return;
+  }
+  if (!element) {
+    element = document.createElement('meta');
+    element.setAttribute(attribute, key);
+    document.head.appendChild(element);
+  }
+  element.setAttribute('content', value);
+}
+
+function applyMeta({ title, description, image, imageWidth, imageHeight, url, type = 'website', isNsfw = false }: MetaTagsProps) {
   const appTitle = getEnv('VITE_APP_TITLE') || 'Waifu API';
   const fullTitle = title ? `${title} - ${appTitle}` : appTitle;
   const desc = description || defaultDescription;
-  const canonicalUrl = url || window.location.href;
   const siteIcon = `${window.location.origin}/android-chrome-512x512.png?v=20261024-logo-v2`;
-  const ogImage = (image && !isNsfw) ? image : siteIcon;
-  const twitterCard = (image && !isNsfw) ? 'summary_large_image' : 'summary';
+  const ogImage = image && !isNsfw ? image : siteIcon;
 
-  return (
-    <Helmet>
-      <title>{fullTitle}</title>
-      <meta name="description" content={desc} />
+  document.title = fullTitle;
+  setMeta('name', 'description', desc);
+  setMeta('property', 'og:title', fullTitle);
+  setMeta('property', 'og:description', desc);
+  setMeta('property', 'og:image', ogImage);
+  setMeta('property', 'og:image:width', imageWidth ? String(imageWidth) : null);
+  setMeta('property', 'og:image:height', imageHeight ? String(imageHeight) : null);
+  setMeta('property', 'og:type', type);
+  setMeta('property', 'og:url', url || window.location.href);
+  setMeta('name', 'twitter:card', image && !isNsfw ? 'summary_large_image' : 'summary');
+  setMeta('name', 'twitter:title', fullTitle);
+  setMeta('name', 'twitter:description', desc);
+  setMeta('name', 'twitter:image', ogImage);
+  setMeta('name', 'rating', isNsfw ? 'adult' : null);
+}
 
-      {/* OpenGraph */}
-      <meta property="og:title" content={fullTitle} />
-      <meta property="og:description" content={desc} />
-      <meta property="og:image" content={ogImage} />
-      {imageWidth && <meta property="og:image:width" content={String(imageWidth)} />}
-      {imageHeight && <meta property="og:image:height" content={String(imageHeight)} />}
-      <meta property="og:type" content={type} />
-      <meta property="og:url" content={canonicalUrl} />
-
-      {/* Twitter */}
-      <meta name="twitter:card" content={twitterCard} />
-      <meta name="twitter:title" content={fullTitle} />
-      <meta name="twitter:description" content={desc} />
-      <meta name="twitter:image" content={ogImage} />
-
-      {/* NSFW rating */}
-      {isNsfw && <meta name="rating" content="adult" />}
-    </Helmet>
-  );
+export function MetaTags(props: MetaTagsProps) {
+  const { title, description, image, imageWidth, imageHeight, url, type, isNsfw } = props;
+  useEffect(() => {
+    applyMeta({ title, description, image, imageWidth, imageHeight, url, type, isNsfw });
+    return () => applyMeta({});
+  }, [title, description, image, imageWidth, imageHeight, url, type, isNsfw]);
+  return null;
 }

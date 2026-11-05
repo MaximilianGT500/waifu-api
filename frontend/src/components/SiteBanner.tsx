@@ -1,15 +1,16 @@
 import { useState } from 'react';
-import { Info, CheckCircle2, AlertTriangle, AlertOctagon, X } from 'lucide-react';
+import { Info, CircleCheck, TriangleAlert, OctagonAlert, X } from 'lucide-react';
 import { useActiveBanner } from '../hooks/useBanner';
 import { BannerVariant } from '../types';
+import { readLocal, writeLocal } from '../utils/storage';
 
 const DISMISSED_KEY = 'dismissedBanner';
 
 const bannerStyles: Record<BannerVariant, { className: string; icon: typeof Info }> = {
-    [BannerVariant.Info]: { className: 'bg-blue-500/10 border-blue-500/30 text-blue-700 dark:text-blue-300', icon: Info },
-    [BannerVariant.Success]: { className: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300', icon: CheckCircle2 },
-    [BannerVariant.Warning]: { className: 'bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-300', icon: AlertTriangle },
-    [BannerVariant.Danger]: { className: 'bg-red-500/10 border-red-500/30 text-red-700 dark:text-red-300', icon: AlertOctagon },
+    [BannerVariant.Info]: { className: 'bg-info/10 text-info', icon: Info },
+    [BannerVariant.Success]: { className: 'bg-success/10 text-success', icon: CircleCheck },
+    [BannerVariant.Warning]: { className: 'bg-warning/12 text-warning', icon: TriangleAlert },
+    [BannerVariant.Danger]: { className: 'bg-destructive/10 text-destructive', icon: OctagonAlert },
 };
 
 interface BannerViewProps {
@@ -18,38 +19,34 @@ interface BannerViewProps {
     onDismiss?: () => void;
 }
 
-/** Presentational banner, shared by the live site banner and the admin preview. Message is plain text. */
 export const BannerView = ({ message, variant, onDismiss }: BannerViewProps) => {
     const { className, icon: Icon } = bannerStyles[variant] ?? bannerStyles[BannerVariant.Info];
     return (
-        <div role="status" className={`flex items-start gap-3 px-4 lg:px-6 py-3 border-b text-sm font-medium ${className}`}>
-            <Icon size={18} className="shrink-0 mt-0.5" />
-            <p className="flex-1 whitespace-pre-line break-words">{message}</p>
+        <div role="status" className={`mx-3 mt-3 flex items-start gap-3 rounded-[var(--radius-panel)] px-4 py-3 text-sm font-bold sm:mx-5 sm:mt-5 lg:mx-8 lg:mt-7 ${className}`}>
+            <Icon size={18} className="mt-0.5 shrink-0" aria-hidden="true" />
+            <p className="flex-1 whitespace-pre-line text-foreground wrap-break-word">{message}</p>
             {onDismiss && (
                 <button
+                    type="button"
                     onClick={onDismiss}
                     aria-label="Dismiss banner"
-                    className="shrink-0 p-1 -m-1 rounded-md opacity-70 hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/10 transition"
+                    className="-m-1 grid size-7 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
                 >
-                    <X size={16} />
+                    <X size={15} aria-hidden="true" />
                 </button>
             )}
         </div>
     );
 };
 
-/**
- * Site-wide banner, editable from the banner settings page. Dismissal is remembered per browser and keyed on the
- * banner's last update, so editing the banner shows it again to everyone.
- */
 const SiteBanner = () => {
     const { data: banner } = useActiveBanner();
-    const [dismissed, setDismissed] = useState(() => localStorage.getItem(DISMISSED_KEY));
+    const [dismissed, setDismissed] = useState(() => readLocal(DISMISSED_KEY));
 
     if (!banner || dismissed === banner.updatedAt) return null;
 
     const dismiss = () => {
-        localStorage.setItem(DISMISSED_KEY, banner.updatedAt);
+        writeLocal(DISMISSED_KEY, banner.updatedAt);
         setDismissed(banner.updatedAt);
     };
 

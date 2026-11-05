@@ -89,6 +89,8 @@ func MeetsPermission(r Role, configuredMin string, defaultMin Role) bool {
 
 const roleClaimURI = "http://schemas.microsoft.com/ws/2008/06/identity/claims/role"
 
+const maxTokenLength = 4096
+
 type Identity struct {
 	UserID    int64
 	Name      string
@@ -97,15 +99,18 @@ type Identity struct {
 	APIKeyID  *int64
 }
 
-type Claims struct {
-	DiscordID string `json:"discord_id"`
-	Role      string `json:"-"`
-	jwt.RegisteredClaims
+type TokenClaims struct {
+	UserID    int64
+	Name      string
+	Role      Role
+	DiscordID string
+	IssuedAt  time.Time
 }
 
-func (c *Claims) GetCustomRole() string { return c.Role }
-
-func IssueJWT(key []byte, issuer, audience string, userID int64, name string, role Role, discordID string) (string, error) {
+func IssueJWT(key []byte, issuer, audience string, userID int64, name string, role Role, discordID string, lifetime time.Duration) (string, error) {
+	if lifetime <= 0 {
+		lifetime = 7 * 24 * time.Hour
+	}
 	now := time.Now().UTC()
 	claims := jwt.MapClaims{
 		"sub":         strconv.FormatInt(userID, 10),
@@ -115,13 +120,19 @@ func IssueJWT(key []byte, issuer, audience string, userID int64, name string, ro
 		"iss":         issuer,
 		"aud":         audience,
 		"iat":         now.Unix(),
-		"exp":         now.Add(7 * 24 * time.Hour).Unix(),
+		"nbf":         now.Unix(),
+		"exp":         now.Add(lifetime).Unix(),
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return tok.SignedString(key)
 }
 
-func ValidateJWT(tokenString string, key []byte, issuer, audience string) (*Identity, error) {
+var errTokenTooLong = errors.New("token too long")
+
+func ValidateJWT(tokenString string, key []byte, issuer, audience string) (*TokenClaims, error) {
+	if len(tokenString) > maxTokenLength {
+		return nil, errTokenTooLong
+	}
 	tok, err := jwt.Parse(tokenString, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
@@ -132,6 +143,7 @@ func ValidateJWT(tokenString string, key []byte, issuer, audience string) (*Iden
 		jwt.WithIssuer(issuer),
 		jwt.WithAudience(audience),
 		jwt.WithExpirationRequired(),
+		jwt.WithLeeway(30*time.Second),
 	)
 	if err != nil {
 		return nil, err
@@ -143,17 +155,20 @@ func ValidateJWT(tokenString string, key []byte, issuer, audience string) (*Iden
 
 	sub, _ := claims["sub"].(string)
 	userID, err := strconv.ParseInt(sub, 10, 64)
-	if err != nil {
+	if err != nil || userID <= 0 {
 		return nil, errors.New("invalid subject claim")
 	}
 	roleStr, _ := claims[roleClaimURI].(string)
 	role, ok := ParseRole(roleStr)
 	if !ok {
-
 		role = RoleUser
 	}
 	name, _ := claims["unique_name"].(string)
 	discordID, _ := claims["discord_id"].(string)
 
-	return &Identity{UserID: userID, Name: name, Role: role, DiscordID: discordID}, nil
+	out := &TokenClaims{UserID: userID, Name: name, Role: role, DiscordID: discordID}
+	if iat, err := claims.GetIssuedAt(); err == nil && iat != nil {
+		out.IssuedAt = iat.Time
+	}
+	return out, nil
 }

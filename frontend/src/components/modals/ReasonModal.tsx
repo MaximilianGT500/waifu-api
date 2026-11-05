@@ -1,62 +1,105 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useId, useRef } from 'react';
+import { Loader2 } from 'lucide-react';
 import Modal from '../Modal';
 
 interface ReasonModalProps {
     isOpen: boolean;
     onClose: () => void;
-    onSubmit: (reason: string) => void;
+    onSubmit: (reason: string) => void | Promise<unknown>;
     title: string;
     description: string;
     placeholder?: string;
     submitText?: string;
     required?: boolean;
     maxLength?: number;
-    /** Pre-fill the textarea (e.g. when editing an existing reason/report). */
     initialValue?: string;
-    /** Confirm button colour. Defaults to destructive (reporting/rejecting); use 'primary' for plain edits. */
     confirmVariant?: 'primary' | 'destructive';
 }
 
-const ReasonModal = ({ isOpen, onClose, onSubmit, title, description, placeholder = "Reason...", submitText = "Submit", required = true, maxLength, initialValue = '', confirmVariant = 'destructive' }: ReasonModalProps) => {
+const ReasonModal = ({ isOpen, onClose, onSubmit, title, description, placeholder = "Reason…", submitText = "Submit", required = true, maxLength = 500, initialValue = '', confirmVariant = 'destructive' }: ReasonModalProps) => {
     const [reason, setReason] = useState(initialValue);
+    const [isPending, setIsPending] = useState(false);
+    const pendingRef = useRef(false);
+    const mounted = useRef(true);
+    const descriptionId = useId();
+    const counterId = useId();
 
     useEffect(() => {
-        if (isOpen) setReason(initialValue);
-    }, [isOpen, initialValue]);
+        mounted.current = true;
+        return () => { mounted.current = false; };
+    }, []);
 
-    const handleSubmit = () => {
-        if (required && !reason.trim()) return;
-        onSubmit(reason.trim());
+    const [synced, setSynced] = useState({ isOpen, initialValue });
+    if (synced.isOpen !== isOpen || synced.initialValue !== initialValue) {
+        setSynced({ isOpen, initialValue });
+        if (isOpen) setReason(initialValue);
+        else setIsPending(false);
+    }
+
+    useEffect(() => {
+        if (!isOpen) pendingRef.current = false;
+    }, [isOpen]);
+
+    const length = [...reason].length;
+    const isDisabled = (required && !reason.trim()) || isPending;
+
+    const handleSubmit = async () => {
+        if (pendingRef.current || (required && !reason.trim())) return;
+        pendingRef.current = true;
+        setIsPending(true);
+        try {
+            await onSubmit(reason.trim());
+        } finally {
+            pendingRef.current = false;
+            if (mounted.current) setIsPending(false);
+        }
     };
 
-    const isDisabled = required && !reason.trim();
-
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title={title}>
-            <div className="space-y-4">
-                <p className="text-sm text-muted-foreground">{description}</p>
+        <Modal isOpen={isOpen} onClose={isPending ? () => {} : onClose} title={title}>
+            <form
+                className="space-y-4"
+                onSubmit={(e) => {
+                    e.preventDefault();
+                    handleSubmit();
+                }}
+            >
+                <p id={descriptionId} className="text-sm text-muted-foreground">{description}</p>
                 <div>
                     <textarea
                         value={reason}
-                        onChange={(e) => setReason(maxLength ? e.target.value.slice(0, maxLength) : e.target.value)}
+                        onChange={(e) => setReason([...e.target.value].slice(0, maxLength).join(''))}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                                e.preventDefault();
+                                handleSubmit();
+                            }
+                        }}
                         placeholder={placeholder}
-                        className="w-full p-3 bg-secondary rounded-lg outline-none focus:ring-1 focus:ring-primary text-foreground min-h-[100px] resize-none"
+                        aria-label={title}
+                        aria-describedby={`${descriptionId} ${counterId}`}
+                        aria-required={required}
+                        disabled={isPending}
+                        data-autofocus
+                        className="input min-h-28 resize-y"
                     />
-                    {maxLength && (
-                        <p className="text-xs text-muted-foreground text-right mt-1">{reason.length}/{maxLength}</p>
-                    )}
+                    <p id={counterId} className="field-hint text-right tabular">
+                        {length}/{maxLength}
+                    </p>
                 </div>
-                <div className="flex gap-3 justify-end">
-                    <button onClick={onClose} className="px-4 py-2 bg-secondary rounded-lg font-bold">Cancel</button>
+                <div className="flex justify-end gap-2">
+                    <button type="button" onClick={onClose} disabled={isPending} className="btn btn-secondary">Cancel</button>
                     <button
-                        onClick={handleSubmit}
+                        type="submit"
                         disabled={isDisabled}
-                        className={`px-4 py-2 rounded-lg font-bold disabled:opacity-50 ${confirmVariant === 'primary' ? 'bg-primary text-primary-foreground' : 'bg-destructive text-destructive-foreground'}`}
+                        aria-busy={isPending}
+                        className={`btn ${confirmVariant === 'primary' ? 'btn-primary' : 'btn-danger'}`}
                     >
+                        {isPending && <Loader2 size={16} className="animate-spin" aria-hidden="true" />}
                         {submitText}
                     </button>
                 </div>
-            </div>
+            </form>
         </Modal>
     );
 };

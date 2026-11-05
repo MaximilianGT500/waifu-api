@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -36,6 +37,7 @@ func reportStatusInt(s string) (int, bool) {
 
 func (s *Server) handleCreateReport(w http.ResponseWriter, r *http.Request) {
 	ident := IdentityFromContext(r.Context())
+	ctx := r.Context()
 	var req struct {
 		ImageID     int64  `json:"imageId"`
 		Description string `json:"description"`
@@ -46,13 +48,14 @@ func (s *Server) handleCreateReport(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	req.Description = strings.TrimSpace(req.Description)
 	errs := map[string][]string{}
 	if req.ImageID <= 0 {
 		errs["ImageId"] = append(errs["ImageId"], "Invalid Image ID.")
 	}
 	if req.Description == "" {
 		errs["Description"] = append(errs["Description"], "Description is required.")
-	} else if len(req.Description) > 500 {
+	} else if runeLen(req.Description) > 500 {
 		errs["Description"] = append(errs["Description"], "Description must not exceed 500 characters.")
 	}
 	if len(errs) > 0 {
@@ -60,154 +63,182 @@ func (s *Server) handleCreateReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var existing bool
-	_ = s.db.QueryRow(r.Context(), `
-		SELECT EXISTS(SELECT 1 FROM "Reports" WHERE "UserId" = $1 AND "ImageId" = $2 AND "Status" = 0)`,
-		ident.UserID, req.ImageID).Scan(&existing)
-	if existing {
-		Conflict(w, r, "You already have a pending report for this image.")
-		return
-	}
-
-	var repID int64
-	var createdAt time.Time
-	err := s.db.QueryRow(r.Context(), `
-		INSERT INTO "Reports" ("UserId","ImageId","Description","CreatedAt","Status")
-		VALUES ($1,$2,$3,now(),0) RETURNING "Id","CreatedAt"`,
-		ident.UserID, req.ImageID, req.Description).Scan(&repID, &createdAt)
+	var rep reportDto
+	err := pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
+		var reviewStatus int
+		var uploaderID *int64
+		if err := tx.QueryRow(ctx, `SELECT "ReviewStatus", "UploaderId" FROM "Images" WHERE "Id" = $1`, req.ImageID).
+			Scan(&reviewStatus, &uploaderID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return errNotFound(fmt.Sprintf("Image with ID %d not found.", req.ImageID))
+			}
+			return err
+		}
+		if !canSeeContent(ident, reviewStatus, uploaderID) {
+			return errNotFound(fmt.Sprintf("Image with ID %d not found.", req.ImageID))
+		}
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('reports'), $1::int)`, int32(ident.UserID)); err != nil {
+			return err
+		}
+		var existing bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS(SELECT 1 FROM "Reports" WHERE "UserId" = $1 AND "ImageId" = $2 AND "Status" = 0)`,
+			ident.UserID, req.ImageID).Scan(&existing); err != nil {
+			return err
+		}
+		if existing {
+			return errConflict("You already have a pending report for this image.")
+		}
+		if max := s.cfg.Limits.MaxPendingReportsPerUser; max > 0 && !isModerator(ident) {
+			var open int
+			if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM "Reports" WHERE "UserId" = $1 AND "Status" = 0`, ident.UserID).Scan(&open); err != nil {
+				return err
+			}
+			if open >= max {
+				return errConflict(fmt.Sprintf("You have too many pending reports (limit %d). Please wait for some to be handled.", max))
+			}
+		}
+		var createdAt time.Time
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO "Reports" ("UserId","ImageId","Description","CreatedAt","Status")
+			VALUES ($1,$2,$3,now(),0) RETURNING "Id","CreatedAt"`,
+			ident.UserID, req.ImageID, req.Description).Scan(&rep.ID, &createdAt); err != nil {
+			return err
+		}
+		rep.CreatedAt = createdAt
+		return nil
+	})
 	if err != nil {
-		InternalError(w, r, s.log, err)
+		s.writeDomainError(w, r, err)
 		return
 	}
 
-	rep := reportDto{
-		ID:           repID,
-		UserID:       ident.UserID,
-		User:         nil,
-		ImageID:      &req.ImageID,
-		Image:        nil,
-		Description:  req.Description,
-		Status:       "Pending",
-		ReviewerNote: nil,
-		CreatedAt:    createdAt,
-	}
+	rep.UserID = ident.UserID
+	rep.ImageID = &req.ImageID
+	rep.Description = req.Description
+	rep.Status = "Pending"
 	w.Header().Set("Location", fmt.Sprintf("/reports?id=%d", rep.ID))
 	writeJSON(w, http.StatusCreated, rep)
 }
 
+const reportColumns = `r."Id", r."UserId", u."Name", u."AvatarUrl", r."ImageId", r."Description", r."Status", r."ReviewerNote", r."CreatedAt"`
+
+func scanReport(row pgx.Row) (*reportDto, error) {
+	var rep reportDto
+	var st int
+	var userName *string
+	var userAvatar *string
+	var desc *string
+	if err := row.Scan(&rep.ID, &rep.UserID, &userName, &userAvatar, &rep.ImageID, &desc, &st, &rep.ReviewerNote, &rep.CreatedAt); err != nil {
+		return nil, err
+	}
+	rep.Description = orEmpty(desc)
+	rep.Status = reportStatusString(st)
+	rep.User = &userMinimalDto{ID: rep.UserID, Name: orEmpty(userName), AvatarURL: userAvatar}
+	return &rep, nil
+}
+
+func (s *Server) attachReportImages(ctx context.Context, ident *auth.Identity, reports []*reportDto) error {
+	var ids []int64
+	for _, rep := range reports {
+		if rep.ImageID != nil {
+			ids = append(ids, *rep.ImageID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	opts := hydrateOptions{ident: ident, childrenReviewStatus: "Accepted"}
+	if isModerator(ident) {
+		opts.childrenReviewStatus = "All"
+	}
+	var imageRows []imageRow
+	b := &pgx.Batch{}
+	b.Queue(`SELECT `+imageColumns+` FROM "Images" i WHERE i."Id" = ANY($1)`, ids).Query(func(rows pgx.Rows) error {
+		for rows.Next() {
+			row, err := scanImageRow(rows, false)
+			if err != nil {
+				return err
+			}
+			imageRows = append(imageRows, row)
+		}
+		return rows.Err()
+	})
+	children := queueImageChildren(b, ids, opts)
+	if err := s.db.SendBatch(ctx, b).Close(); err != nil {
+		return err
+	}
+	dtos := s.imageDtos(imageRows, opts, children)
+	byID := make(map[int64]*imageDto, len(dtos))
+	for i := range dtos {
+		byID[dtos[i].ID] = &dtos[i]
+	}
+	for _, rep := range reports {
+		if rep.ImageID != nil {
+			if img, ok := byID[*rep.ImageID]; ok {
+				cp := *img
+				rep.Image = &cp
+			}
+		}
+	}
+	return nil
+}
+
 func (s *Server) handleListReports(w http.ResponseWriter, r *http.Request) {
 	ident := IdentityFromContext(r.Context())
-	page, pageSize := paginationParams(r, s.cfg.PageSizes.ReportDefault, s.cfg.PageSizes.ReportMax)
+	ctx := r.Context()
+	page, pageSize := s.paginationParams(r, s.cfg.PageSizes.ReportDefault, s.cfg.PageSizes.ReportMax)
 
+	a := &sqlArgs{}
 	where := " WHERE TRUE"
-	args := []any{}
-	ph := func() string { return fmt.Sprintf("$%d", len(args)+1) }
-	if st := r.URL.Query().Get("status"); st != "" {
+	if st := queryGet(r, "status"); st != "" {
 		statusInt, ok := reportStatusInt(st)
 		if !ok {
 			invalidEnumProblem(w, r, "status", st)
 			return
 		}
-		where += fmt.Sprintf(` AND r."Status" = %s`, ph())
-		args = append(args, statusInt)
+		where += ` AND r."Status" = ` + a.add(statusInt)
 	}
-	mine := queryBool(r, "mine", false)
-	if isModerator(ident) && mine {
-		where += fmt.Sprintf(` AND r."UserId" = %s`, ph())
-		args = append(args, ident.UserID)
-	} else if !isModerator(ident) {
-		where += fmt.Sprintf(` AND r."UserId" = %s`, ph())
-		args = append(args, ident.UserID)
+	if !isModerator(ident) || queryBool(r, "mine", false) {
+		where += ` AND r."UserId" = ` + a.add(ident.UserID)
 	}
 
 	var total int64
-	_ = s.db.QueryRow(r.Context(), `SELECT COUNT(*) FROM "Reports" r`+where, args...).Scan(&total)
-
-	query := `SELECT r."Id", r."UserId", u."Name", u."AvatarUrl", r."ImageId", r."Description", r."Status", r."ReviewerNote", r."CreatedAt"
-		FROM "Reports" r JOIN "Users" u ON u."Id" = r."UserId"` + where + ` ORDER BY r."CreatedAt" DESC`
-	query += fmt.Sprintf(" LIMIT %d OFFSET %d", pageSize, (page-1)*pageSize)
-
-	rows, err := s.db.Query(r.Context(), query, args...)
-	if err != nil {
+	var reports []*reportDto
+	query := `SELECT ` + reportColumns + ` FROM "Reports" r JOIN "Users" u ON u."Id" = r."UserId"` + where +
+		fmt.Sprintf(` ORDER BY r."CreatedAt" DESC, r."Id" DESC LIMIT %d OFFSET %d`, pageSize, offsetOf(page, pageSize))
+	b := &pgx.Batch{}
+	b.Queue(`SELECT COUNT(*) FROM "Reports" r`+where, a.args...).QueryRow(func(row pgx.Row) error {
+		return row.Scan(&total)
+	})
+	b.Queue(query, a.args...).Query(func(rows pgx.Rows) error {
+		for rows.Next() {
+			rep, err := scanReport(rows)
+			if err != nil {
+				return err
+			}
+			reports = append(reports, rep)
+		}
+		return rows.Err()
+	})
+	if err := s.db.SendBatch(ctx, b).Close(); err != nil {
 		InternalError(w, r, s.log, err)
 		return
 	}
-	defer rows.Close()
-
-	items := []reportDto{}
-	for rows.Next() {
-		var rep reportDto
-		var st int
-		var userName string
-		var userAvatar *string
-		var reviewerNote *string
-		if err := rows.Scan(&rep.ID, &rep.UserID, &userName, &userAvatar, &rep.ImageID,
-			&rep.Description, &st, &reviewerNote, &rep.CreatedAt); err != nil {
-			InternalError(w, r, s.log, err)
-			return
-		}
-		rep.Status = reportStatusString(st)
-		rep.ReviewerNote = reviewerNote
-		rep.User = &userMinimalDto{ID: rep.UserID, Name: userName, AvatarURL: userAvatar}
-		if rep.ImageID != nil {
-			rep.Image = s.loadReportImage(r, ident, *rep.ImageID)
-		}
-		items = append(items, rep)
-	}
-	writeJSON(w, http.StatusOK, newPaginated(items, page, pageSize, total, s.cfg.PageSizes.ReportMax, s.cfg.PageSizes.ReportDefault))
-}
-
-func (s *Server) loadReportImage(r *http.Request, ident *auth.Identity, imageID int64) *imageDto {
-	var row imageRow
-	err := s.db.QueryRow(r.Context(), `
-		SELECT "Id","PerceptualHash","Extension","DominantColor","Source","UploaderId","UploadedAt",
-			"IsNsfw","IsAnimated","Width","Height","ByteSize","ReviewStatus"
-		FROM "Images" WHERE "Id" = $1`, imageID).
-		Scan(&row.ID, &row.PerceptualHash, &row.Extension, &row.DominantColor, &row.Source, &row.UploaderID,
-			&row.UploadedAt, &row.IsNsfw, &row.IsAnimated, &row.Width, &row.Height, &row.ByteSize, &row.ReviewStatus)
-	if err != nil {
-		return nil
-	}
-	dto, err := s.assembleImageDto(r.Context(), row, ident, "All", false, nil, false)
-	if err != nil {
-		return nil
-	}
-	dto.Favorites = 0
-	dto.LikedAt = nil
-	dto.Albums = []imageAlbumRef{}
-	return dto
-}
-
-func (s *Server) loadReport(w http.ResponseWriter, r *http.Request, ident *auth.Identity, id int64) (*reportDto, bool) {
-	var rep reportDto
-	var st int
-	var userName string
-	var userAvatar *string
-	var reviewerNote *string
-	err := s.db.QueryRow(r.Context(), `
-		SELECT r."Id", r."UserId", u."Name", u."AvatarUrl", r."ImageId", r."Description", r."Status", r."ReviewerNote", r."CreatedAt"
-		FROM "Reports" r JOIN "Users" u ON u."Id" = r."UserId"
-		WHERE r."Id" = $1`, id).
-		Scan(&rep.ID, &rep.UserID, &userName, &userAvatar, &rep.ImageID, &rep.Description, &st, &reviewerNote, &rep.CreatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		NotFound(w, r, fmt.Sprintf("Report with ID %d not found.", id))
-		return nil, false
-	}
-	if err != nil {
+	if err := s.attachReportImages(ctx, ident, reports); err != nil {
 		InternalError(w, r, s.log, err)
-		return nil, false
+		return
 	}
-	rep.Status = reportStatusString(st)
-	rep.ReviewerNote = reviewerNote
-	rep.User = &userMinimalDto{ID: rep.UserID, Name: userName, AvatarURL: userAvatar}
-	if rep.ImageID != nil {
-		rep.Image = s.loadReportImage(r, ident, *rep.ImageID)
+	items := make([]reportDto, 0, len(reports))
+	for _, rep := range reports {
+		items = append(items, *rep)
 	}
-	return &rep, true
+	writeJSON(w, http.StatusOK, s.newPaginated(items, page, pageSize, total, s.cfg.PageSizes.ReportMax, s.cfg.PageSizes.ReportDefault))
 }
 
 func (s *Server) handlePatchReport(w http.ResponseWriter, r *http.Request) {
 	ident := IdentityFromContext(r.Context())
+	ctx := r.Context()
 	id, err := parseID(r.PathValue("id"))
 	if err != nil {
 		RouteNotFound(w, r)
@@ -225,40 +256,49 @@ func (s *Server) handlePatchReport(w http.ResponseWriter, r *http.Request) {
 	}
 	description := ""
 	if req.Description != nil {
-		description = *req.Description
+		description = strings.TrimSpace(*req.Description)
 	}
 	if description == "" {
-		WriteValidationProblem(w, r, map[string][]string{
-			"Description": {"Description is required."},
-		})
+		WriteValidationProblem(w, r, map[string][]string{"Description": {"Description is required."}})
 		return
 	}
-	if len(description) > 500 {
-		WriteValidationProblem(w, r, map[string][]string{
-			"Description": {"Description must not exceed 500 characters."},
-		})
+	if runeLen(description) > 500 {
+		WriteValidationProblem(w, r, map[string][]string{"Description": {"Description must not exceed 500 characters."}})
 		return
 	}
 
-	rep, ok := s.loadReport(w, r, ident, id)
-	if !ok {
+	err = pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
+		var userID int64
+		var st int
+		if err := tx.QueryRow(ctx, `SELECT "UserId", "Status" FROM "Reports" WHERE "Id" = $1 FOR UPDATE`, id).Scan(&userID, &st); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return errNotFound(fmt.Sprintf("Report with ID %d not found.", id))
+			}
+			return err
+		}
+		if userID != ident.UserID && !isModerator(ident) {
+			return errForbidden("You can only edit your own reports.")
+		}
+		if st != 0 {
+			return errConflict("This report has already been handled and can no longer be edited.")
+		}
+		_, err := tx.Exec(ctx, `UPDATE "Reports" SET "Description" = $1 WHERE "Id" = $2`, description, id)
+		return err
+	})
+	if err != nil {
+		s.writeDomainError(w, r, err)
 		return
 	}
-	if rep.UserID != ident.UserID && !isModerator(ident) {
-		Forbidden(w, r, "You can only edit your own reports.")
-		return
-	}
-	if rep.Status != "Pending" {
-		Conflict(w, r, "This report has already been handled and can no longer be edited.")
-		return
-	}
-	trimmed := strings.TrimSpace(description)
-	_, err = s.db.Exec(r.Context(), `UPDATE "Reports" SET "Description" = $1 WHERE "Id" = $2`, trimmed, id)
+
+	rep, err := scanReport(s.db.QueryRow(ctx, `SELECT `+reportColumns+` FROM "Reports" r JOIN "Users" u ON u."Id" = r."UserId" WHERE r."Id" = $1`, id))
 	if err != nil {
 		InternalError(w, r, s.log, err)
 		return
 	}
-	rep.Description = trimmed
+	if err := s.attachReportImages(ctx, ident, []*reportDto{rep}); err != nil {
+		InternalError(w, r, s.log, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, rep)
 }
 
@@ -276,29 +316,34 @@ func (s *Server) resolveReport(w http.ResponseWriter, r *http.Request, newStatus
 		RouteNotFound(w, r)
 		return
 	}
-	var st int
-	err = s.db.QueryRow(r.Context(), `SELECT "Status" FROM "Reports" WHERE "Id" = $1`, id).Scan(&st)
-	if errors.Is(err, pgx.ErrNoRows) {
-		NotFound(w, r, fmt.Sprintf("Report with ID %d not found.", id))
-		return
-	}
-	if err != nil {
-		InternalError(w, r, s.log, err)
-		return
-	}
-	if st != 0 {
-		Conflict(w, r, "This report has already been handled.")
-		return
-	}
 	var req struct {
 		Reason string `json:"reason"`
 	}
 	_ = decodeJSON(r, &req)
-	_, err = s.db.Exec(r.Context(), `
-		UPDATE "Reports" SET "Status" = $1, "ReviewerNote" = $2 WHERE "Id" = $3`,
-		newStatus, orEmptyString(strings.TrimSpace(req.Reason)), id)
+	reason := strings.TrimSpace(req.Reason)
+	if runeLen(reason) > 500 {
+		WriteValidationProblem(w, r, map[string][]string{"Reason": {"Reason must not exceed 500 characters."}})
+		return
+	}
+
+	res, err := s.db.Exec(r.Context(), `
+		UPDATE "Reports" SET "Status" = $1, "ReviewerNote" = $2 WHERE "Id" = $3 AND "Status" = 0`,
+		newStatus, orEmptyString(reason), id)
 	if err != nil {
 		InternalError(w, r, s.log, err)
+		return
+	}
+	if res.RowsAffected() == 0 {
+		var exists bool
+		if err := s.db.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM "Reports" WHERE "Id" = $1)`, id).Scan(&exists); err != nil {
+			InternalError(w, r, s.log, err)
+			return
+		}
+		if !exists {
+			NotFound(w, r, fmt.Sprintf("Report with ID %d not found.", id))
+			return
+		}
+		Conflict(w, r, "This report has already been handled.")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -306,34 +351,32 @@ func (s *Server) resolveReport(w http.ResponseWriter, r *http.Request, newStatus
 
 func (s *Server) handleCancelReport(w http.ResponseWriter, r *http.Request) {
 	ident := IdentityFromContext(r.Context())
+	ctx := r.Context()
 	id, err := parseID(r.PathValue("id"))
 	if err != nil {
 		RouteNotFound(w, r)
 		return
 	}
-	var userID int64
-	var st int
-	err = s.db.QueryRow(r.Context(), `SELECT "UserId", "Status" FROM "Reports" WHERE "Id" = $1`, id).Scan(&userID, &st)
-	if errors.Is(err, pgx.ErrNoRows) {
-		NotFound(w, r, fmt.Sprintf("Report with ID %d not found.", id))
-		return
-	}
+	err = pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
+		var userID int64
+		var st int
+		if err := tx.QueryRow(ctx, `SELECT "UserId", "Status" FROM "Reports" WHERE "Id" = $1 FOR UPDATE`, id).Scan(&userID, &st); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return errNotFound(fmt.Sprintf("Report with ID %d not found.", id))
+			}
+			return err
+		}
+		if userID != ident.UserID && !isModerator(ident) {
+			return errForbidden("You can only cancel your own reports.")
+		}
+		if st != 0 {
+			return errConflict("This report has already been handled.")
+		}
+		_, err := tx.Exec(ctx, `UPDATE "Reports" SET "Status" = 3 WHERE "Id" = $1`, id)
+		return err
+	})
 	if err != nil {
-		InternalError(w, r, s.log, err)
-		return
-	}
-
-	if st != 0 {
-		Conflict(w, r, "This report has already been handled.")
-		return
-	}
-	if userID != ident.UserID && !isModerator(ident) {
-		Forbidden(w, r, "You can only cancel your own reports.")
-		return
-	}
-	_, err = s.db.Exec(r.Context(), `UPDATE "Reports" SET "Status" = 3 WHERE "Id" = $1`, id)
-	if err != nil {
-		InternalError(w, r, s.log, err)
+		s.writeDomainError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

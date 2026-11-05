@@ -1,5 +1,5 @@
-﻿<!doctype html>
-<html lang="en">
+<!doctype html>
+<html lang="en" data-design="collector">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/x-icon" href="/favicon.ico?v=20261024-logo-v2" />
@@ -10,6 +10,7 @@
     <link rel="icon" type="image/png" sizes="512x512" href="/android-chrome-512x512.png?v=20261024-logo-v2" />
     <link rel="manifest" href="/site.webmanifest?v=20261024-logo-v2" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#f4f4f5" data-light="#f4f4f5" data-dark="#09090b" />
     <meta name="description" content="The API for your Waifu content. Access thousands of categorized anime illustrations via our robust REST API or browse freely." />
     <meta property="og:title" content="Waifu API" />
     <meta property="og:description" content="The API for your Waifu content. Access thousands of categorized anime illustrations via our robust REST API or browse freely." />
@@ -22,37 +23,11 @@
     <meta name="twitter:description" content="The API for your Waifu content. Access thousands of categorized anime illustrations via our robust REST API or browse freely." />
     <meta name="twitter:image" content="/android-chrome-512x512.png?v=20261024-logo-v2" />
     <script src="/config.js?v=runtime-env-v2"></script>
-    <script>
-      // Apply site title from config
-      (function() {
-        const appTitle = (window.env && window.env.VITE_APP_TITLE) || 'Waifu API';
-        document.title = appTitle;
-
-        // Update meta tags
-        const ogTitle = document.querySelector('meta[property="og:title"]');
-        if (ogTitle) ogTitle.content = appTitle;
-
-        const twitterTitle = document.querySelector('meta[name="twitter:title"]');
-        if (twitterTitle) twitterTitle.content = appTitle;
-      })();
-
-      // Immediate theme application to prevent flash of unstyled content (FOUC)
-      (function() {
-        try {
-          const savedTheme = localStorage.getItem('theme');
-          const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-
-          if (savedTheme === 'dark' || (!savedTheme && systemDark) || (savedTheme === 'system' && systemDark)) {
-            document.documentElement.classList.add('dark');
-          } else {
-            document.documentElement.classList.remove('dark');
-          }
-        } catch (e) {}
-      })();
-    </script>
+    <script src="/init.js?v=4"></script>
     <title>Waifu API</title>
   </head>
   <body>
+    <noscript>This application requires JavaScript. The API itself can be used without a browser.</noscript>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

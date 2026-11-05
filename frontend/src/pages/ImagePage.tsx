@@ -1,6 +1,6 @@
-import { useState, useEffect} from 'react';
+import { useState, useEffect, useEffectEvent, useRef, ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router';
 import api from '../services/api';
 import { ImageDto, Role, ImageFormData, ReviewStatus, ReviewStatusFilter, ReviewableContentType } from '../types';
 import { Heart, Trash2, Edit, FolderPlus, Flag, Image, GitPullRequest, Clock, Plus, Download, Link2, Check } from 'lucide-react';
@@ -19,15 +19,33 @@ import NsfwWarning from '../components/NsfwWarning';
 import NotFound from './NotFound';
 import { MetaTags } from '../hooks/useMetaTags';
 import { isBot } from '../utils/bot';
+import ExternalLink from '../components/ExternalLink';
+import StatusBadge, { StatusTone } from '../components/StatusBadge';
+import { displayUrl, safeExternalUrl } from '../utils/safeUrl';
+import { safeColor } from '../utils/color';
+import { nowIso } from '../utils/time';
+import { isId } from '../utils/ids';
+import { useHolo } from '../hooks/useHolo';
+
+const StatRow = ({ label, children }: { label: string; children: ReactNode }) => (
+  <div className="flex min-w-0 items-center justify-between gap-4 py-3">
+    <dt className="shrink-0 text-muted-foreground">{label}</dt>
+    <dd className="min-w-0 text-right font-bold tabular">{children}</dd>
+  </div>
+);
 
 const ImagePage = () => {
   const { id } = useParams<{ id: string }>();
+  if (!isId(id)) return <NotFound />;
+  return <ImageView id={id} />;
+};
+
+const ImageView = ({ id }: { id: string }) => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { showNotification } = useNotification();
   const checkAuth = useAuthGuard();
   const queryClient = useQueryClient();
-  // The caller's own pending tag/artist edit proposals for this image (add/remove), via the review-tasks API.
   const { data: pendingEdits } = useMyPendingImageEdits(!!user);
 
   const [image, setImage] = useState<ImageDto | null>(null);
@@ -38,7 +56,6 @@ const ImagePage = () => {
   const { showWarning: showNsfwWarning, setShowWarning: setShowNsfwWarning, grantConsent, hasConsent } = useNsfwConsent(false);
   const { updateImage } = useImageUpdate();
 
-  // Modals
   const [showEditModal, setShowEditModal] = useState(false);
   const [showSuggestModal, setShowSuggestModal] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -46,6 +63,9 @@ const ImagePage = () => {
   const [isAlbumModalOpen, setIsAlbumModalOpen] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isLiking, setIsLiking] = useState(false);
+  const requestSeq = useRef(0);
+  const holo = useHolo<HTMLDivElement>(4);
 
   const isAdminOrModerator = user && (user.role === Role.Admin || user.role === Role.Moderator);
 
@@ -63,97 +83,104 @@ const ImagePage = () => {
   const handleDownload = async () => {
     if (!image || isDownloading) return;
     setIsDownloading(true);
+    const url = safeExternalUrl(image.url);
+    if (!url) {
+      setIsDownloading(false);
+      return;
+    }
     try {
-      const res = await fetch(image.url, { mode: 'cors' });
+      const res = await fetch(url, { mode: 'cors', credentials: 'omit' });
       if (!res.ok) throw new Error('download failed');
       const blob = await res.blob();
       const objectUrl = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = objectUrl;
-      anchor.download = `${image.id}${image.extension || '.png'}`;
+      const extension = /^\.[a-z0-9]{1,5}$/i.test(image.extension) ? image.extension : '.png';
+      anchor.download = `${image.id}${extension}`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
-      URL.revokeObjectURL(objectUrl);
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
       showNotification('success', 'Download started');
     } catch {
-      window.open(image.url, '_blank', 'noopener,noreferrer');
+      window.open(url, '_blank', 'noopener,noreferrer');
     } finally {
       setIsDownloading(false);
     }
   };
 
-  // Function to fetch image (can be called silently to refresh data)
   const fetchImage = async (silent = false) => {
+    const seq = ++requestSeq.current;
     try {
       if (!silent) { setIsLoading(true); setError(null); setNotFound(false); }
-      // Removed userId query param as it's handled by auth token now
       const params: Record<string, string> = {};
       if (isAdminOrModerator) {
         params.childrenReviewStatus = ReviewStatusFilter.All;
       } else if (user) {
-        // Regular users: also surface their own pending (not-yet-approved) tags/artists on the image.
         params.includeMyPendingChildren = 'true';
       }
       const { data } = await api.get<ImageDto>(`/images/${id}`, { params, skipGlobalErrorHandler: true });
+      if (seq !== requestSeq.current) return;
       setImage(data);
 
       if (data.isNsfw && !silent && !hasConsent() && !isBot()) {
         setShowNsfwWarning(true);
       }
-    } catch (err: any) {
-      if (err?.response?.status === 404) {
+    } catch (err) {
+      if (seq !== requestSeq.current) return;
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 404 || status === 400) {
         if (!silent) setNotFound(true);
       } else {
-        console.error("Failed to fetch image", err);
         if (!silent) setError("Failed to load image.");
       }
     } finally {
-      if (!silent) setIsLoading(false);
+      if (!silent && seq === requestSeq.current) setIsLoading(false);
     }
   };
 
+  const loadImage = useEffectEvent(() => { fetchImage(); });
+
   useEffect(() => {
-    fetchImage();
-  }, [id, user?.id]); // Keep user.id dependency to refresh if user logs in/out
+    loadImage();
+  }, [id, user?.id]);
 
   const handleDelete = async () => {
     try {
       await api.delete(`/images/${id}`);
       showNotification('success', 'Image deleted successfully');
       navigate('/gallery');
-    } catch (err) {
-      showNotification('error', 'Failed to delete image');
+    } catch {
     }
   };
 
   const handleLike = async () => {
     if (!checkAuth('You must be logged in to like images.')) return;
-    if (!image) return;
+    if (!image || isLiking) return;
+    setIsLiking(true);
     try {
       if (image.likedAt) {
         await api.delete(`/users/${user!.id}/albums/favorites/images/${image.id}`, { skipGlobalErrorHandler: true });
         setImage(prev => prev ? { ...prev, likedAt: undefined, favorites: prev.favorites - 1 } : null);
       } else {
         await api.post(`/users/${user!.id}/albums/favorites/images/${image.id}`, {}, { skipGlobalErrorHandler: true });
-        setImage(prev => prev ? { ...prev, likedAt: new Date().toISOString(), favorites: prev.favorites + 1 } : null);
+        setImage(prev => prev ? { ...prev, likedAt: nowIso(), favorites: prev.favorites + 1 } : null);
       }
-      // Silently refresh to update the "Favorites" checkmark in the dropdown
       fetchImage(true);
-    } catch (err) { console.error(err); }
+    } catch {
+      showNotification('error', 'Could not update your favorites. Please try again.');
+    } finally {
+      setIsLiking(false);
+    }
   };
 
   const handleSaveEdit = async (data: ImageFormData) => {
     if (!isAdminOrModerator || !image) return;
-    try {
-      const updatedImage = await updateImage(image.id, data);
-      setImage(updatedImage);
-      setShowEditModal(false);
-      showNotification('success', 'Image updated successfully');
-      fetchImage(true);
-    } catch (err) {
-      console.error('Failed to update image', err);
-    }
+    const updatedImage = await updateImage(image.id, data);
+    setImage(updatedImage);
+    setShowEditModal(false);
+    showNotification('success', 'Image updated successfully');
+    fetchImage(true);
   };
 
   const handleReport = async (description: string) => {
@@ -163,34 +190,45 @@ const ImagePage = () => {
       showNotification('success', 'Report submitted');
       setIsReportModalOpen(false);
       invalidateNavBadges(queryClient);
-    } catch (err) {
-      // showNotification('error', 'Failed to submit report'); // Handled globally
+    } catch {
+      return;
     }
   };
 
-  const getReviewStatusLabel = (status: ReviewStatus) => {
-      switch (status) {
-          case ReviewStatus.Pending: return 'Pending';
-          case ReviewStatus.Accepted: return 'Accepted';
-          case ReviewStatus.Rejected: return 'Rejected';
-          default: return 'Unknown';
-      }
+  const statusInfo: Record<ReviewStatus, { label: string; tone: StatusTone }> = {
+      [ReviewStatus.Pending]: { label: 'Pending review', tone: 'pending' },
+      [ReviewStatus.Accepted]: { label: 'Accepted', tone: 'success' },
+      [ReviewStatus.Rejected]: { label: 'Rejected', tone: 'danger' },
   };
 
-  const getReviewStatusColor = (status: ReviewStatus) => {
-      switch (status) {
-          case ReviewStatus.Pending: return 'text-yellow-500';
-          case ReviewStatus.Accepted: return 'text-green-500';
-          case ReviewStatus.Rejected: return 'text-red-500';
-          default: return 'text-muted-foreground';
-      }
-  };
-
-  if (isLoading) return <div className="p-10 text-center">Loading...</div>;
+  if (isLoading) {
+    return (
+      <div className="page" role="status" aria-live="polite">
+        <span className="sr-only">Loading…</span>
+        <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_23rem] xl:grid-cols-[minmax(0,1fr)_25rem] xl:gap-12" aria-hidden="true">
+          <div className="sleeve aspect-[4/3] animate-pulse" />
+          <div className="space-y-4">
+            <div className="h-10 w-44 animate-pulse rounded-full bg-sleeve" />
+            <div className="h-11 w-full animate-pulse rounded-full bg-sleeve" />
+            <div className="h-52 w-full animate-pulse rounded-[var(--radius-panel)] bg-sleeve" />
+          </div>
+        </div>
+      </div>
+    );
+  }
   if (notFound) return <NotFound />;
-  if (error || !image) return <div className="p-10 text-center text-destructive">{error || "Not Found"}</div>;
+  if (error || !image) {
+    return (
+      <div className="page flex min-h-[50vh] flex-col items-center justify-center text-center" role="alert">
+        <p className="font-bold">{error || 'Not Found'}</p>
+        <p className="mt-1 text-sm text-muted-foreground">The server did not respond. Try again in a moment.</p>
+        <button type="button" onClick={() => fetchImage()} className="btn btn-secondary mt-5">
+          Try again
+        </button>
+      </div>
+    );
+  }
 
-  // Split the caller's own proposed changes for this image so the tag/artist lists can mark removals and append additions.
   const edit = pendingEdits?.get(image.id);
   const removedTagIds = new Set((edit?.removeTags ?? []).map(t => t.id));
   const removedArtistIds = new Set((edit?.removeArtists ?? []).map(a => a.id));
@@ -204,9 +242,40 @@ const ImagePage = () => {
     tagNames && `Tags: ${tagNames}`,
     `${image.width}x${image.height}`,
   ].filter(Boolean).join(' | ');
+  const tint = safeColor(image.dominantColor);
+  const aspect = image.height > 0 ? Math.round((image.width / image.height) * 10000) / 10000 : 1;
+  const status = statusInfo[image.reviewStatus] ?? { label: 'Unknown', tone: 'neutral' as StatusTone };
+
+  const entityChip = (opts: {
+    key: string; name: string; entityHref: string; galleryHref: string; galleryTitle: string;
+    removed?: boolean; pending?: boolean; added?: boolean; addedPending?: boolean; title?: string;
+  }) => {
+    const tone = opts.added
+      ? 'bg-[color-mix(in_oklab,var(--success)_14%,var(--card))] text-success'
+      : opts.removed
+        ? 'bg-[color-mix(in_oklab,var(--destructive)_12%,var(--card))] text-destructive'
+        : opts.pending
+          ? 'text-warning outline-1 outline-dashed -outline-offset-1 outline-warning/60'
+          : '';
+    return (
+      <span key={opts.key} title={opts.title} className={`sticker items-stretch gap-0 overflow-hidden p-0 text-sm ${tone}`}>
+        <Link to={opts.entityHref} className={`flex min-w-0 items-center gap-1 py-1.5 pl-3.5 pr-2.5 transition-colors hover:bg-foreground/6 ${opts.removed ? 'line-through decoration-destructive/60' : ''}`}>
+          {opts.added && <Plus size={13} className="shrink-0" aria-hidden="true" />}
+          {opts.pending && !opts.added && <Clock size={12} className="shrink-0" aria-hidden="true" />}
+          <span className="truncate">{opts.name}</span>
+          {opts.addedPending && <Clock size={12} className="shrink-0" aria-hidden="true" />}
+        </Link>
+        <Link to={opts.galleryHref} title={opts.galleryTitle} aria-label={`${opts.galleryTitle}: ${opts.name}`} className="flex items-center border-l-2 border-dashed border-foreground/10 px-2.5 opacity-70 transition-[background-color,opacity] hover:bg-foreground/6 hover:opacity-100">
+          <Image size={14} aria-hidden="true" />
+        </Link>
+      </span>
+    );
+  };
+
+  const secondaryAction = 'btn btn-secondary btn-icon';
 
   return (
-      <div className="container mx-auto px-4 py-6 md:py-8">
+      <div className="page">
         <MetaTags
           title={`Image #${image.id}`}
           description={metaDescription}
@@ -216,15 +285,28 @@ const ImagePage = () => {
           type="article"
           isNsfw={image.isNsfw}
         />
-        <div className="bg-card rounded-lg shadow-lg border border-border">
-
-          {/* Image Preview */}
-          <div className="relative bg-black/5 rounded-t-lg overflow-hidden">
-            <img
-                src={image.url}
-                alt={`Image ${image.id}`}
-                className="w-full h-auto object-contain max-h-[60vh] md:max-h-[80vh] mx-auto"
-            />
+        <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_23rem] xl:grid-cols-[minmax(0,1fr)_25rem] xl:gap-12">
+          <div
+            className="sleeve relative flex min-h-72 items-center justify-center overflow-hidden p-3 sm:p-6 lg:p-8"
+            style={tint ? { backgroundColor: `color-mix(in oklab, ${tint} 22%, var(--sleeve))` } : undefined}
+          >
+            <div
+              onPointerMove={holo.onPointerMove}
+              onPointerLeave={holo.onPointerLeave}
+              className="holo-card relative max-w-full rounded-[1.4rem] bg-card p-2 shadow-lift sm:p-2.5 dark:ring-1 dark:ring-white/8"
+              style={{ width: `min(100%, calc(min(76vh, 62rem) * ${aspect} + 1.25rem))` }}
+            >
+              <img
+                  src={image.url}
+                  alt={artistNames ? `Image #${image.id} by ${artistNames}` : `Image #${image.id}`}
+                  width={image.width}
+                  height={image.height}
+                  decoding="async"
+                  fetchPriority="high"
+                  className="block h-auto w-full rounded-[1rem]"
+              />
+              <span className="holo-foil" aria-hidden="true" />
+            </div>
 
             {image.isNsfw && showNsfwWarning && (
                 <NsfwWarning
@@ -235,206 +317,189 @@ const ImagePage = () => {
             )}
           </div>
 
-          <div className="p-4 md:p-6">
-            <h1 className="text-2xl md:text-3xl font-bold mb-4">Image #{image.id}</h1>
+          <div className="space-y-7 lg:sticky lg:top-6">
+            <div>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                <h1 className="text-4xl font-black tabular">Image #{image.id}</h1>
+                {image.reviewStatus !== ReviewStatus.Accepted && <StatusBadge label={status.label} tone={status.tone} />}
+              </div>
+              {artistNames && <p className="mt-2 text-muted-foreground">by <span className="font-bold text-foreground">{artistNames}</span></p>}
+            </div>
 
-            {/* Actions Bar */}
-            <div className="flex flex-wrap items-center gap-2 md:gap-3 mb-6">
+            <div className="flex flex-wrap gap-2">
               <button
+                  type="button"
                   onClick={handleLike}
-                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-secondary hover:bg-secondary/80 text-secondary-foreground transition-colors font-medium text-sm"
+                  disabled={isLiking}
+                  aria-pressed={!!image.likedAt}
+                  aria-label={`${image.likedAt ? 'Remove from favorites' : 'Add to favorites'} (${image.favorites} favorites)`}
+                  className={`btn ${image.likedAt ? 'bg-brand-soft text-brand-ink ring-1 ring-brand/30 hover:bg-brand-soft' : 'btn-secondary'}`}
               >
-                <Heart size={18} className={image.likedAt ? "text-red-500 fill-current" : ""} />
-                <span>{image.favorites}</span>
+                <Heart size={17} aria-hidden="true" className={image.likedAt ? 'fill-current' : ''} />
+                <span aria-hidden="true" className="tabular">{image.favorites}</span>
               </button>
 
-              {/* Download Button */}
               <button
-                  onClick={handleDownload}
-                  disabled={isDownloading}
-                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-secondary hover:bg-secondary/80 text-secondary-foreground transition-colors font-medium text-sm disabled:opacity-60"
-                  title="Download the original image"
+                  type="button"
+                  onClick={() => {
+                      if (!checkAuth('You must be logged in to add images to albums.')) return;
+                      setIsAlbumModalOpen(true);
+                  }}
+                  className="btn btn-primary flex-1"
               >
-                  <Download size={18} className={isDownloading ? "animate-pulse" : ""} />
-                  <span className="hidden sm:inline">Download</span>
-              </button>
-
-              {/* Copy Link Button */}
-              <button
-                  onClick={handleCopyLink}
-                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-secondary hover:bg-secondary/80 text-secondary-foreground transition-colors font-medium text-sm"
-                  title="Copy link to this image"
-              >
-                  {linkCopied ? <Check size={18} className="text-green-500" /> : <Link2 size={18} />}
-                  <span className="hidden sm:inline">{linkCopied ? 'Copied' : 'Copy Link'}</span>
-              </button>
-
-              {/* Album Button */}
-              <button
-                  onClick={() => setIsAlbumModalOpen(true)}
-                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium text-sm"
-              >
-                  <FolderPlus size={18} className="shrink-0" />
+                  <FolderPlus size={17} className="shrink-0" aria-hidden="true" />
                   <span className="truncate">Add to Album</span>
               </button>
 
-              {/* Report Button */}
               <button
+                  type="button"
+                  onClick={handleDownload}
+                  disabled={isDownloading}
+                  aria-label="Download the original image"
+                  title="Download the original image"
+                  className={secondaryAction}
+              >
+                  <Download size={17} className={isDownloading ? 'animate-pulse' : ''} aria-hidden="true" />
+              </button>
+
+              <button
+                  type="button"
+                  onClick={handleCopyLink}
+                  aria-label={linkCopied ? 'Link copied' : 'Copy link to this image'}
+                  title="Copy link to this image"
+                  className={secondaryAction}
+              >
+                  {linkCopied ? <Check size={17} className="text-success" aria-hidden="true" /> : <Link2 size={17} aria-hidden="true" />}
+              </button>
+            </div>
+
+            <div className="panel px-5 text-sm">
+              <dl className="grid grid-cols-2 gap-4 pb-4 pt-5">
+                <div className="flex flex-col-reverse gap-0.5">
+                  <dt className="text-muted-foreground">Resolution</dt>
+                  <dd className="text-2xl font-black tabular">{image.width} × {image.height}</dd>
+                </div>
+                <div className="flex flex-col-reverse gap-0.5">
+                  <dt className="text-muted-foreground">Favorites</dt>
+                  <dd className="flex items-center gap-1.5 text-2xl font-black tabular">
+                    <Heart size={19} aria-hidden="true" className="fill-brand text-brand" />{image.favorites}
+                  </dd>
+                </div>
+              </dl>
+              <dl className="divide-y-2 divide-dashed divide-border border-t-2 border-dashed border-border">
+                <StatRow label="File size">{(image.byteSize / (1024 * 1024)).toFixed(2)} MB</StatRow>
+                <StatRow label="Uploaded">{new Date(image.uploadedAt).toLocaleDateString()}</StatRow>
+                <StatRow label="Status"><StatusBadge label={status.label} tone={status.tone} /></StatRow>
+                {image.source && (
+                  <StatRow label="Source">
+                    <ExternalLink
+                        href={image.source}
+                        title={image.source}
+                        className="block truncate text-brand-ink underline-offset-2 hover:underline"
+                        fallback={<span className="break-all">{image.source}</span>}
+                    >
+                      {displayUrl(image.source)}
+                    </ExternalLink>
+                  </StatRow>
+                )}
+              </dl>
+            </div>
+
+            <section aria-labelledby="image-artists">
+              <h2 id="image-artists" className="mb-2.5 text-sm font-bold">
+                Artist{image.artists.length + addedArtists.length === 1 ? '' : 's'}
+              </h2>
+              <div className="flex flex-wrap items-center gap-2">
+                {image.artists.map(artist => {
+                    const removed = removedArtistIds.has(artist.id);
+                    const pending = artist.reviewStatus === ReviewStatus.Pending;
+                    return entityChip({
+                      key: `artist-${artist.id}`,
+                      name: artist.name,
+                      entityHref: `/artists?includedIds=${artist.id}`,
+                      galleryHref: `/gallery?includedArtists=${artist.id}`,
+                      galleryTitle: 'View images by this artist',
+                      removed, pending,
+                      title: removed ? 'You proposed removing this artist (awaiting review)' : pending ? 'Your artist (awaiting review)' : undefined,
+                    });
+                })}
+                {addedArtists.map(a => entityChip({
+                    key: `add-artist-${a.id}`,
+                    name: a.name,
+                    entityHref: `/artists?includedIds=${a.id}`,
+                    galleryHref: `/gallery?includedArtists=${a.id}`,
+                    galleryTitle: 'View images by this artist',
+                    added: true,
+                    addedPending: a.reviewStatus === ReviewStatus.Pending,
+                    title: a.reviewStatus === ReviewStatus.Pending
+                        ? 'You proposed adding this artist (also awaiting review)'
+                        : 'You proposed adding this artist (awaiting review)',
+                }))}
+                {image.artists.length + addedArtists.length === 0 && <p className="text-sm text-muted-foreground">No artist credited yet.</p>}
+              </div>
+            </section>
+
+            <section aria-labelledby="image-tags">
+              <h2 id="image-tags" className="mb-2.5 text-sm font-bold">Tags</h2>
+              <div className="flex flex-wrap items-center gap-2">
+                {image.tags.map(tag => {
+                    const removed = removedTagIds.has(tag.id);
+                    const pending = tag.reviewStatus === ReviewStatus.Pending;
+                    return entityChip({
+                      key: `tag-${tag.id}`,
+                      name: tag.name,
+                      entityHref: `/tags?includedIds=${tag.id}`,
+                      galleryHref: `/gallery?includedTags=${encodeURIComponent(tag.slug)}`,
+                      galleryTitle: 'View images with this tag',
+                      removed, pending,
+                      title: removed ? 'You proposed removing this tag (awaiting review)' : pending ? 'Your tag (awaiting review)' : undefined,
+                    });
+                })}
+                {addedTags.map(t => entityChip({
+                    key: `add-tag-${t.id}`,
+                    name: t.name,
+                    entityHref: `/tags?includedIds=${t.id}`,
+                    galleryHref: `/gallery?includedTags=${encodeURIComponent(t.slug)}`,
+                    galleryTitle: 'View images with this tag',
+                    added: true,
+                    addedPending: t.reviewStatus === ReviewStatus.Pending,
+                    title: t.reviewStatus === ReviewStatus.Pending
+                        ? 'You proposed adding this tag (also awaiting review)'
+                        : 'You proposed adding this tag (awaiting review)',
+                }))}
+                {image.tags.length + addedTags.length === 0 && <p className="text-sm text-muted-foreground">No tags yet.</p>}
+              </div>
+            </section>
+
+            <div className="flex flex-wrap gap-1 border-t-2 border-dashed border-border pt-5">
+              <button
+                  type="button"
                   onClick={() => {
                       if (!checkAuth('You must be logged in to report images.')) return;
                       setIsReportModalOpen(true);
                   }}
-                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-secondary hover:bg-secondary/80 text-secondary-foreground transition-colors font-medium text-sm"
-                  title="Report"
+                  className="btn btn-ghost btn-sm"
+                  aria-label="Report this image"
               >
-                  <Flag size={18} />
-                  <span className="hidden sm:inline">Report</span>
+                  <Flag size={15} aria-hidden="true" /> Report
               </button>
 
-              {/* Suggest edit (authenticated non-moderators) */}
               {user && !isAdminOrModerator && (
-                  <button
-                      onClick={() => setShowSuggestModal(true)}
-                      className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-secondary hover:bg-secondary/80 text-secondary-foreground transition-colors font-medium text-sm"
-                      title="Suggest an edit"
-                  >
-                      <GitPullRequest size={18} />
-                      <span className="hidden sm:inline">Suggest edit</span>
+                  <button type="button" onClick={() => setShowSuggestModal(true)} className="btn btn-ghost btn-sm" aria-label="Suggest an edit">
+                      <GitPullRequest size={15} aria-hidden="true" /> Suggest edit
                   </button>
               )}
 
               {isAdminOrModerator && (
                   <>
-                    <div className="h-8 w-px bg-border mx-1 hidden sm:block"></div>
-                    <button
-                        onClick={() => setShowEditModal(true)}
-                        className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-accent hover:bg-accent/80 text-accent-foreground transition-colors font-medium text-sm"
-                        title="Edit"
-                    >
-                      <Edit size={18} /> <span className="hidden sm:inline">Edit</span>
+                    <button type="button" onClick={() => setShowEditModal(true)} className="btn btn-ghost btn-sm" aria-label="Edit image">
+                      <Edit size={15} aria-hidden="true" /> Edit
                     </button>
-                    <button
-                        onClick={() => setIsDeleteModalOpen(true)}
-                        className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-destructive hover:bg-destructive/90 text-white transition-colors font-medium text-sm"
-                        title="Delete"
-                    >
-                      <Trash2 size={18} /> <span className="hidden sm:inline">Delete</span>
+                    <button type="button" onClick={() => setIsDeleteModalOpen(true)} className="btn btn-danger-soft btn-sm" aria-label="Delete image">
+                      <Trash2 size={15} aria-hidden="true" /> Delete
                     </button>
                   </>
               )}
-            </div>
-
-            <div className="space-y-3 text-sm text-muted-foreground">
-              <div className="flex flex-wrap gap-x-6 gap-y-2">
-                <p>Uploaded: <span className="text-foreground font-medium">{new Date(image.uploadedAt).toLocaleDateString()}</span></p>
-                <p>Size: <span className="text-foreground font-medium">{(image.byteSize / (1024 * 1024)).toFixed(2)} MB</span></p>
-                <p>Dims: <span className="text-foreground font-medium">{image.width}x{image.height}</span></p>
-                <p>Status: <span className={`font-medium ${getReviewStatusColor(image.reviewStatus)}`}>{getReviewStatusLabel(image.reviewStatus)}</span></p>
-              </div>
-
-              {image.source && (
-                  <p>Source: <a href={image.source} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline truncate inline-block max-w-[200px] align-bottom">{image.source}</a></p>
-              )}
-            </div>
-
-            <div className="mt-6">
-              <h3 className="text-xs font-bold uppercase text-muted-foreground mb-3 tracking-wider">
-                Artist{image.artists.length > 1 ? 's' : ''}
-              </h3>
-              <div className="flex flex-wrap gap-2 items-center">
-                {image.artists.map(artist => {
-                    const removed = removedArtistIds.has(artist.id);
-                    const pending = artist.reviewStatus === ReviewStatus.Pending;
-                    const nameState = removed ? 'text-destructive/80 line-through opacity-70' : pending ? 'text-amber-600' : 'text-secondary-foreground';
-                    return (
-                    <span key={artist.id} className="inline-flex items-stretch"
-                          title={removed ? 'You proposed removing this artist (awaiting review)' : pending ? 'Your artist (awaiting review)' : undefined}>
-                      <Link
-                          to={`/artists?includedIds=${artist.id}`}
-                          className={`flex items-center px-3 py-1.5 text-sm font-medium bg-secondary hover:bg-primary hover:text-primary-foreground border border-border border-r-0 rounded-l-full transition-colors ${nameState}`}
-                      >
-                        {pending && <Clock size={12} className="mr-1 shrink-0" />}{artist.name}
-                      </Link>
-                      <Link
-                          to={`/gallery?includedArtists=${artist.id}`}
-                          className="flex items-center px-2.5 bg-secondary/60 hover:bg-primary hover:text-primary-foreground text-primary border border-border rounded-r-full transition-colors"
-                          title="View images by this artist"
-                      >
-                        <Image size={14} />
-                      </Link>
-                    </span>
-                    );
-                })}
-                {addedArtists.map(a => (
-                    <span key={`add-artist-${a.id}`} className="inline-flex items-stretch"
-                          title={a.reviewStatus === ReviewStatus.Pending
-                              ? 'You proposed adding this artist (also awaiting review)'
-                              : 'You proposed adding this artist (awaiting review)'}>
-                      <Link
-                          to={`/artists?includedIds=${a.id}`}
-                          className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium bg-green-500/10 hover:bg-green-500/20 text-green-600 border border-green-500/40 border-r-0 rounded-l-full transition-colors"
-                      >
-                        <Plus size={13} className="shrink-0" />{a.name}{a.reviewStatus === ReviewStatus.Pending && <Clock size={12} className="ml-0.5 shrink-0" />}
-                      </Link>
-                      <Link
-                          to={`/gallery?includedArtists=${a.id}`}
-                          className="flex items-center px-2.5 bg-green-500/10 hover:bg-green-500/20 text-green-600 border border-green-500/40 rounded-r-full transition-colors"
-                          title="View images by this artist"
-                      >
-                        <Image size={14} />
-                      </Link>
-                    </span>
-                ))}
-              </div>
-            </div>
-
-            <div className="mt-6">
-              <h3 className="text-xs font-bold uppercase text-muted-foreground mb-3 tracking-wider">Tags</h3>
-              <div className="flex flex-wrap gap-2 items-center">
-                {image.tags.map(tag => {
-                    const removed = removedTagIds.has(tag.id);
-                    const pending = tag.reviewStatus === ReviewStatus.Pending;
-                    const nameState = removed ? 'text-destructive/80 line-through opacity-70' : pending ? 'text-amber-600' : 'text-secondary-foreground';
-                    return (
-                    <span key={tag.id} className="inline-flex items-stretch"
-                          title={removed ? 'You proposed removing this tag (awaiting review)' : pending ? 'Your tag (awaiting review)' : undefined}>
-                      <Link
-                          to={`/tags?includedIds=${tag.id}`}
-                          className={`flex items-center px-3 py-1.5 text-sm font-medium bg-secondary hover:bg-primary hover:text-primary-foreground border border-border border-r-0 rounded-l-full transition-colors ${nameState}`}
-                      >
-                        {pending && <Clock size={12} className="mr-1 shrink-0" />}{tag.name}
-                      </Link>
-                      <Link
-                          to={`/gallery?includedTags=${encodeURIComponent(tag.slug)}`}
-                          className="flex items-center px-2.5 bg-secondary/60 hover:bg-primary hover:text-primary-foreground text-primary border border-border rounded-r-full transition-colors"
-                          title="View images with this tag"
-                      >
-                        <Image size={14} />
-                      </Link>
-                    </span>
-                    );
-                })}
-                {addedTags.map(t => (
-                    <span key={`add-tag-${t.id}`} className="inline-flex items-stretch"
-                          title={t.reviewStatus === ReviewStatus.Pending
-                              ? 'You proposed adding this tag (also awaiting review)'
-                              : 'You proposed adding this tag (awaiting review)'}>
-                      <Link
-                          to={`/tags?includedIds=${t.id}`}
-                          className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium bg-green-500/10 hover:bg-green-500/20 text-green-600 border border-green-500/40 border-r-0 rounded-l-full transition-colors"
-                      >
-                        <Plus size={13} className="shrink-0" />{t.name}{t.reviewStatus === ReviewStatus.Pending && <Clock size={12} className="ml-0.5 shrink-0" />}
-                      </Link>
-                      <Link
-                          to={`/gallery?includedTags=${encodeURIComponent(t.slug)}`}
-                          className="flex items-center px-2.5 bg-green-500/10 hover:bg-green-500/20 text-green-600 border border-green-500/40 rounded-r-full transition-colors"
-                          title="View images with this tag"
-                      >
-                        <Image size={14} />
-                      </Link>
-                    </span>
-                ))}
-              </div>
             </div>
           </div>
         </div>
@@ -463,7 +528,6 @@ const ImagePage = () => {
                 isOpen={showSuggestModal}
                 onClose={() => {
                     setShowSuggestModal(false);
-                    // A suggestion may have just been submitted, so refresh the caller's pending proposals + badge.
                     queryClient.invalidateQueries({ queryKey: ['my-pending-image-edits'] });
                     invalidateNavBadges(queryClient);
                 }}

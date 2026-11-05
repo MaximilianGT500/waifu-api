@@ -1,0 +1,37 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["react", "typescript", "jsx-a11y", "oxc", "unicorn"],
+  "env": { "browser": true, "es2024": true },
+  "ignorePatterns": ["dist", "node_modules"],
+  "categories": { "correctness": "error", "suspicious": "warn" },
+  "rules": {
+    "react/rules-of-hooks": "error",
+    "react/exhaustive-deps": "warn",
+    "react/only-export-components": ["warn", { "allowConstantExport": true }],
+    "react/jsx-key": "error",
+    "react/no-danger": "error",
+    "react/jsx-no-target-blank": "error",
+    "react/react-in-jsx-scope": "off",
+    "react/set-state-in-effect": "off",
+    "react/exhaustive-effect-dependencies": "off",
+    "jsx-a11y/alt-text": "error",
+    "jsx-a11y/anchor-is-valid": "warn",
+    "jsx-a11y/prefer-tag-over-role": "off",
+    "typescript/no-explicit-any": "warn",
+    "unicorn/consistent-function-scoping": "off"
+  },
+  "overrides": [
+    {
+      "files": ["src/context/*.tsx"],
+      "rules": { "react/only-export-components": "off" }
+    },
+    {
+      "files": ["src/components/SearchableSelect.tsx", "src/classic/components/SearchableSelect.tsx"],
+      "rules": {
+        "jsx-a11y/click-events-have-key-events": "off",
+        "jsx-a11y/no-static-element-interactions": "off",
+        "jsx-a11y/interactive-supports-focus": "off"
+      }
+    }
+  ]
+}

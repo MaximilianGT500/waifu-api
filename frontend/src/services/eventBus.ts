@@ -1,23 +1,25 @@
-﻿type ErrorEvent = {
+type ErrorEvent = {
   message: string;
   type: 'error' | 'warning';
 };
 
-type Listener = (event: ErrorEvent) => void;
+type Listener<T> = (event: T) => void;
 
-class EventBus {
-  private listeners: Listener[] = [];
+class EventBus<T> {
+  private listeners: Listener<T>[] = [];
 
-  subscribe(listener: Listener) {
+  subscribe(listener: Listener<T>) {
     this.listeners.push(listener);
     return () => {
       this.listeners = this.listeners.filter((l) => l !== listener);
     };
   }
 
-  emit(event: ErrorEvent) {
+  emit(event: T) {
     this.listeners.forEach((listener) => listener(event));
   }
 }
 
-export const globalErrorBus = new EventBus();
+export const globalErrorBus = new EventBus<ErrorEvent>();
+
+export const authExpiredBus = new EventBus<void>();

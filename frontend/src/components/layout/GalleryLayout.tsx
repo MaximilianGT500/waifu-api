@@ -1,5 +1,5 @@
 import { useState, ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { ImageDto, Role, ImageFormData, ImageOrderBy, NsfwMode, PaginatedList, ReviewableContentType } from '../../types';
 import { useAuth } from '../../context/AuthContext';
@@ -14,13 +14,14 @@ import FloatingRefreshButton from '../FloatingRefreshButton';
 import ConfirmModal from '../modals/ConfirmModal';
 import ImageModal from '../modals/ImageModal';
 import { Option } from '../SearchableSelect';
-import { Search, Tags, Shuffle, Loader2 } from 'lucide-react';
+import { Tags, Shuffle, Loader2 } from 'lucide-react';
+import EmptyState from '../EmptyState';
 import { useTagView } from '../../hooks/useTagView';
 
 interface GalleryLayoutProps {
     images: ImageDto[];
     isLoading: boolean;
-    error?: any;
+    error?: unknown;
     refetch: () => void;
     page: number;
     totalPages: number;
@@ -108,18 +109,18 @@ export const GalleryLayout = ({
             setIsDeleteModalOpen(false);
             setImageToDelete(null);
             showNotification('success', 'Image deleted');
-        } catch(e) { }
+        } catch {
+            return;
+        }
     };
 
     const handleSaveEdit = async (data: ImageFormData) => {
         if (!editingImage) return;
-        try {
-            await updateImage(editingImage.id, data);
-            showNotification('success', 'Image updated');
-            refetch();
-            setIsEditModalOpen(false);
-            setEditingImage(null);
-        } catch (err) { }
+        await updateImage(editingImage.id, data);
+        showNotification('success', 'Image updated');
+        refetch();
+        setIsEditModalOpen(false);
+        setEditingImage(null);
     };
 
     const defaultSortOptions = [
@@ -129,40 +130,46 @@ export const GalleryLayout = ({
     ];
 
     return (
-        <div className="flex h-full relative overflow-hidden">
-            <div className="flex-1 flex flex-col relative min-w-0 overflow-hidden">
+        <div className="flex min-h-full items-start">
+            <div className="min-w-0 flex-1">
                 <FloatingRefreshButton onRefresh={refetch} />
 
-                <div className="flex-1 overflow-y-auto p-4 md:p-6">
-                    <div className="flex flex-col md:flex-row md:items-start justify-between px-4 md:px-6 py-4 border-b border-border backdrop-blur-xl z-10 shrink-0 gap-4 -mx-4 md:-mx-6 -mt-4 md:-mt-6 mb-4">
-                        <div className="min-w-0 flex-1">
-                            {headerContent || (
-                                <h1 className="text-3xl font-black tracking-tight text-foreground flex items-center gap-2 mt-1">
-                                    Gallery
-                                </h1>
-                            )}
-                        </div>
-                        <div className="flex items-center self-end md:self-start shrink-0 gap-2">
-                            <button
-                                onClick={surpriseMe}
-                                disabled={isSurprising}
-                                title="Surprise me with a random image"
-                                className="p-2.5 rounded-lg border transition-colors disabled:opacity-60 bg-card text-muted-foreground border-border hover:text-foreground"
-                            >
-                                {isSurprising ? <Loader2 size={20} className="animate-spin" /> : <Shuffle size={20} />}
-                            </button>
-                            <button
-                                onClick={toggleTags}
-                                title={showTags ? 'Hide tags' : 'Show tags'}
-                                aria-pressed={showTags}
-                                className={`p-2.5 rounded-lg border transition-colors ${showTags ? 'bg-primary text-primary-foreground border-primary' : 'bg-card text-muted-foreground border-border hover:text-foreground'}`}
-                            >
-                                <Tags size={20} />
-                            </button>
-                            <FilterToggleButton isOpen={showFilters} onToggle={() => setShowFilters(!showFilters)} />
-                        </div>
+                <div className="flex flex-col gap-5 px-4 pb-7 pt-7 sm:px-7 md:flex-row md:items-end md:justify-between lg:px-10 lg:pt-10">
+                    <div className="min-w-0 flex-1">
+                        {headerContent || (
+                            <>
+                                <h1 className="page-title">Gallery</h1>
+                                <p className="page-lede">Every accepted image in the collection. Narrow it down with filters.</p>
+                            </>
+                        )}
                     </div>
+                    <div className="flex shrink-0 items-center gap-2 self-end md:self-auto">
+                        <button
+                            type="button"
+                            onClick={surpriseMe}
+                            disabled={isSurprising}
+                            title="Open a random image that matches the content rating"
+                            className="btn btn-secondary"
+                        >
+                            {isSurprising ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Shuffle size={16} aria-hidden="true" />}
+                            <span className="sr-only lg:not-sr-only">Draw a card</span>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={toggleTags}
+                            title={showTags ? 'Hide tags' : 'Show tags'}
+                            aria-label={showTags ? 'Hide tags' : 'Show tags'}
+                            aria-pressed={showTags}
+                            className={`btn ${showTags ? 'bg-brand-soft text-brand-ink ring-1 ring-brand/30 hover:bg-brand-soft' : 'btn-secondary'}`}
+                        >
+                            <Tags size={16} aria-hidden="true" />
+                            <span className="hidden lg:inline">Tags</span>
+                        </button>
+                        <FilterToggleButton isOpen={showFilters} onToggle={() => setShowFilters(!showFilters)} />
+                    </div>
+                </div>
 
+                <div className="px-4 sm:px-7 lg:px-10">
                     <ImageGrid
                         images={images}
                         isLoading={isLoading}
@@ -175,16 +182,12 @@ export const GalleryLayout = ({
                         readOnly={readOnly}
                         showTags={showTags}
                         emptyState={emptyState || (
-                            <div className="flex flex-col items-center justify-center h-[50vh] text-muted-foreground">
-                                <Search size={48} className="mb-4 opacity-20" />
-                                <p className="text-lg font-medium">No images found.</p>
-                                <button
-                                    onClick={() => { setSearchParams(new URLSearchParams()); refetch(); }}
-                                    className="mt-6 px-6 py-2 bg-secondary text-foreground rounded-lg font-bold"
-                                >
-                                    Clear All Filters
-                                </button>
-                            </div>
+                            <EmptyState
+                                isCheckingAlternatives={false}
+                                alternativeCount={null}
+                                onEnableNsfw={() => {}}
+                                onClearFilters={() => { setSearchParams(new URLSearchParams()); refetch(); }}
+                            />
                         )}
                     />
 
@@ -231,7 +234,6 @@ export const GalleryLayout = ({
                     onClose={() => {
                         setIsSuggestModalOpen(false);
                         setSuggestingImage(null);
-                        // A suggestion may have just been submitted, so refresh the caller's pending proposals.
                         queryClient.invalidateQueries({ queryKey: ['my-pending-image-edits'] });
                     }}
                     initialData={suggestingImage}

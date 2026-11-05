@@ -1,8 +1,8 @@
-﻿import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useState } from 'react';
+import { Link } from 'react-router';
 import { Artist, Role, ReviewableContentType, ReviewStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { Plus, Edit2, Trash2, User as UserIcon, ExternalLink, Info, Link as LinkIcon, Image, GitPullRequest, Clock } from 'lucide-react';
+import { Plus, Edit2, Trash2, Info, Link as LinkIcon, Image, GitPullRequest, Clock } from 'lucide-react';
 import ArtistModal, { ArtistFormData } from '../components/modals/ArtistModal';
 import ConfirmModal from '../components/modals/ConfirmModal';
 import Modal from '../components/Modal';
@@ -11,6 +11,15 @@ import Pagination from '../components/Pagination';
 import { useResource } from '../hooks/useResource';
 import { useAuthGuard } from '../hooks/useRequireAuth';
 import { MetaTags } from '../hooks/useMetaTags';
+import SafeExternalLink from '../components/ExternalLink';
+import { displayUrl } from '../utils/safeUrl';
+
+const ARTIST_LINKS = [
+    { key: 'twitter', label: 'Twitter' },
+    { key: 'pixiv', label: 'Pixiv' },
+    { key: 'deviantArt', label: 'DeviantArt' },
+    { key: 'patreon', label: 'Patreon' },
+] as const;
 
 const Artists = () => {
     const { user } = useAuth();
@@ -93,129 +102,123 @@ const Artists = () => {
     const isAdmin = user?.role === Role.Admin;
     const isReviewMode = !(canManage);
 
+    const iconButton = 'relative z-10 grid size-8 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground';
+
     return (
-        <div className="container mx-auto p-6 md:p-10">
+        <div className="page">
             <MetaTags
               title="Artists"
               description="Browse and manage artists."
             />
-            <div className="flex flex-col md:flex-row justify-between items-center mb-10 gap-4">
+            <div className="page-header">
                 <div>
-                    <h1 className="text-3xl font-black flex items-center gap-3 text-foreground"><UserIcon className="text-primary" size={32}/> Artists</h1>
-                    <p className="text-muted-foreground mt-1">Browse and manage artists.</p>
+                    <h1 className="page-title">Artists</h1>
+                    <p className="page-lede">The people behind the illustrations, with links to their pages.</p>
                 </div>
 
-                <div className="flex gap-3 w-full md:w-auto">
+                <div className="flex w-full gap-2 md:w-auto">
                     <SearchInput
                         value={search}
                         onChange={setSearch}
                         searchType={searchType}
                         onSearchTypeChange={setSearchType}
                     />
-
-                    <button onClick={handleOpenCreate} className="flex items-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-xl font-bold hover:opacity-90 shadow-lg transition-all whitespace-nowrap">
-                        <Plus size={20} /> <span className="hidden sm:inline">New</span>
+                    <button type="button" onClick={handleOpenCreate} aria-label="Create artist" className="btn btn-primary shrink-0">
+                        <Plus size={18} aria-hidden="true" /> <span className="hidden sm:inline">New artist</span>
                     </button>
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {loading ? [...Array(8)].map((_,i) => <div key={i} className="h-40 bg-muted rounded-xl animate-pulse"/>) : artists.map(artist => (
-                    <div key={artist.id} className="group bg-card border border-border rounded-xl hover:shadow-md hover:border-primary/50 transition-all overflow-hidden p-6 flex flex-col">
-                        <div className="flex justify-between items-start mb-2">
-                            <div className="flex flex-col gap-1 overflow-hidden min-w-0">
-                                <h3 className="font-bold text-lg truncate text-foreground group-hover:text-primary transition-colors">{artist.name}</h3>
-                                <div className="flex items-center gap-2">
-                                    <span className="text-xs font-mono bg-secondary px-2 py-1 rounded text-muted-foreground select-text w-fit">#{artist.id}</span>
+            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+                {loading ? [...Array(8)].map((_, i) => <div key={i} className="h-44 animate-pulse rounded-[var(--radius-panel)] bg-sleeve" />) : artists.length === 0 ? (
+                    <p className="sleeve col-span-full px-6 py-14 text-center font-bold text-muted-foreground">
+                        No artists match your search.
+                    </p>
+                ) : artists.map(artist => {
+                    const links = ARTIST_LINKS.filter(({ key }) => !!artist[key]);
+                    return (
+                    <article key={artist.id} className="panel group relative flex flex-col p-5 transition-shadow duration-200 hover:shadow-lift has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring">
+                        <div className="flex min-w-0 items-center gap-3">
+                            <span className="card-back grid aspect-[5/7] w-10 shrink-0 place-items-center rounded-[0.7rem] text-lg font-black text-zinc-50 shadow-card" aria-hidden="true">
+                                {[...artist.name.trim()][0]?.toUpperCase() ?? '?'}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                                <h2 className="text-lg font-black leading-snug">
+                                    <Link
+                                        to={`/gallery?includedArtists=${artist.id}`}
+                                        className="block truncate outline-none after:absolute after:inset-0"
+                                        title={`View images by ${artist.name}`}
+                                    >
+                                        {artist.name}
+                                    </Link>
+                                </h2>
+                                <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                                    <span className="tabular">#{artist.id}</span>
                                     {artist.reviewStatus === ReviewStatus.Pending && (
-                                        <span className="text-xs font-medium bg-amber-500/10 text-amber-600 border border-dashed border-amber-500/40 px-1.5 py-0.5 rounded inline-flex items-center gap-1 shrink-0" title="Awaiting review">
-                                            <Clock size={11} /> Pending
+                                        <span className="inline-flex items-center gap-1 rounded-full bg-warning/12 px-2 py-0.5 font-bold text-warning" title="Awaiting review">
+                                            <Clock size={11} aria-hidden="true" /> Pending
                                         </span>
                                     )}
-                                </div>
+                                </p>
                             </div>
+                        </div>
 
-                            <div className="flex gap-2 flex-shrink-0 ml-2">
-                                <button
-                                    onClick={() => setInfoArtist(artist)}
-                                    className="p-1.5 bg-secondary hover:bg-primary hover:text-primary-foreground rounded text-muted-foreground transition-colors shadow-sm"
-                                    title="Info"
-                                >
-                                    <Info size={16} />
+                        <div className="mt-4 flex flex-1 flex-wrap content-start gap-1.5">
+                            {links.length === 0 && <span className="text-sm text-muted-foreground">No links yet</span>}
+                            {links.map(({ key, label }) => {
+                                const url = artist[key] ?? '';
+                                return (
+                                    <SafeExternalLink
+                                        key={key}
+                                        href={url}
+                                        title={url}
+                                        aria-label={`${label}: ${displayUrl(url)} (opens in a new tab)`}
+                                        className="sticker relative z-10 px-2.5 py-1 text-xs transition-colors hover:bg-brand-soft hover:text-brand-ink"
+                                    >
+                                        <LinkIcon size={12} aria-hidden="true" className="shrink-0" />
+                                        {label}
+                                    </SafeExternalLink>
+                                );
+                            })}
+                        </div>
+
+                        <div className="mt-4 flex items-center justify-between gap-2">
+                            <span className="inline-flex items-center gap-1.5 text-sm font-bold">
+                                <Image size={15} className="text-muted-foreground" aria-hidden="true" />
+                                <span className="tabular">{artist.imageCount?.toLocaleString() ?? 0}</span>
+                                <span className="font-normal text-muted-foreground">images</span>
+                            </span>
+                            <div className="flex shrink-0 gap-0.5">
+                                <button type="button" onClick={() => setInfoArtist(artist)} className={iconButton} title="Details" aria-label={`Details for ${artist.name}`}>
+                                    <Info size={16} aria-hidden="true" />
                                 </button>
-                                <Link
-                                    to={`/gallery?includedArtists=${artist.id}`}
-                                    className="p-1.5 bg-secondary hover:bg-primary hover:text-primary-foreground rounded text-muted-foreground transition-colors shadow-sm"
-                                    title="View in Gallery"
-                                >
-                                    <ExternalLink size={16} />
-                                </Link>
-
                                 {canManage ? (
                                     <>
-                                        <button
-                                            onClick={(e) => openEdit(e, artist)}
-                                            className="p-1.5 bg-secondary hover:bg-primary hover:text-primary-foreground rounded text-muted-foreground transition-colors shadow-sm"
-                                            title="Edit"
-                                        >
-                                            <Edit2 size={16}/>
+                                        <button type="button" onClick={(e) => openEdit(e, artist)} className={iconButton} title="Edit" aria-label={`Edit ${artist.name}`}>
+                                            <Edit2 size={15} aria-hidden="true" />
                                         </button>
                                         {isAdmin && (
-                                            <button
-                                                onClick={(e) => openDelete(e, artist)}
-                                                className="p-1.5 bg-secondary hover:bg-destructive hover:text-destructive-foreground rounded text-muted-foreground transition-colors shadow-sm"
-                                                title="Delete"
-                                            >
-                                                <Trash2 size={16}/>
+                                            <button type="button" onClick={(e) => openDelete(e, artist)} className={`${iconButton} hover:bg-destructive/10 hover:text-destructive`} title="Delete" aria-label={`Delete ${artist.name}`}>
+                                                <Trash2 size={15} aria-hidden="true" />
                                             </button>
                                         )}
                                     </>
                                 ) : user && (
                                     <button
+                                        type="button"
                                         onClick={(e) => { e.preventDefault(); e.stopPropagation(); setSuggestArtist(artist); }}
-                                        className="p-1.5 bg-secondary hover:bg-primary hover:text-primary-foreground rounded text-muted-foreground transition-colors shadow-sm"
+                                        className={iconButton}
                                         title="Suggest edit"
+                                        aria-label={`Suggest an edit for ${artist.name}`}
                                     >
-                                        <GitPullRequest size={16}/>
+                                        <GitPullRequest size={15} aria-hidden="true" />
                                     </button>
                                 )}
                             </div>
                         </div>
-
-                        <div className="flex items-center gap-1.5 mt-3 text-xs text-muted-foreground">
-                            <Image size={14} className="text-primary" />
-                            <span className="font-medium">{artist.imageCount?.toLocaleString() ?? 0}</span>
-                            <span>images</span>
-                        </div>
-
-                        <div className="flex flex-col gap-2 text-xs text-muted-foreground mt-auto pt-4">
-                            {artist.twitter && (
-                                <a href={artist.twitter} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 bg-secondary px-2 py-1 rounded hover:bg-primary hover:text-primary-foreground transition-colors" title={artist.twitter}>
-                                    <LinkIcon size={14} className="text-muted-foreground shrink-0"/>
-                                    <span className="truncate">{artist.twitter.replace('https://', '')}</span>
-                                </a>
-                            )}
-                            {artist.pixiv && (
-                                <a href={artist.pixiv} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 bg-secondary px-2 py-1 rounded hover:bg-primary hover:text-primary-foreground transition-colors" title={artist.pixiv}>
-                                    <LinkIcon size={14} className="text-muted-foreground shrink-0"/>
-                                    <span className="truncate">{artist.pixiv.replace('https://', '')}</span>
-                                </a>
-                            )}
-                            {artist.deviantArt && (
-                                <a href={artist.deviantArt} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 bg-secondary px-2 py-1 rounded hover:bg-primary hover:text-primary-foreground transition-colors" title={artist.deviantArt}>
-                                    <LinkIcon size={14} className="text-muted-foreground shrink-0"/>
-                                    <span className="truncate">{artist.deviantArt.replace('https://', '')}</span>
-                                </a>
-                            )}
-                            {artist.patreon && (
-                                <a href={artist.patreon} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 bg-secondary px-2 py-1 rounded hover:bg-primary hover:text-primary-foreground transition-colors" title={artist.patreon}>
-                                    <LinkIcon size={14} className="text-muted-foreground shrink-0"/>
-                                    <span className="truncate">{artist.patreon.replace('https://', '')}</span>
-                                </a>
-                            )}
-                        </div>
-                    </div>
-                ))}
+                    </article>
+                    );
+                })}
             </div>
 
             {!loading && (
@@ -251,51 +254,45 @@ const Artists = () => {
                 />
             )}
 
-            <ConfirmModal isOpen={isDeleteOpen} onClose={() => setIsDeleteOpen(false)} onConfirm={handleDelete} title="Delete Artist" message={<>Delete artist <strong>{selectedArtist?.name}</strong>?</>} zIndex={70} />
+            <ConfirmModal isOpen={isDeleteOpen} onClose={() => setIsDeleteOpen(false)} onConfirm={handleDelete} title="Delete Artist" message={<p>Delete the artist <strong className="text-foreground">{selectedArtist?.name}</strong>? Their images stay in the gallery.</p>} zIndex={70} />
 
             <Modal
                 isOpen={!!infoArtist}
                 onClose={() => setInfoArtist(null)}
                 title="Artist Details"
+                footer={infoArtist && (
+                    <div className="flex justify-end">
+                        <Link to={`/gallery?includedArtists=${infoArtist.id}`} className="btn btn-primary">
+                            View images
+                        </Link>
+                    </div>
+                )}
             >
                 {infoArtist && (
-                    <div className="space-y-4">
+                    <dl className="space-y-4">
                         <div>
-                            <h3 className="text-sm font-bold text-muted-foreground uppercase tracking-wider">Name</h3>
-                            <p className="text-lg font-medium break-words">{infoArtist.name}</p>
+                            <dt className="text-sm text-muted-foreground">Name</dt>
+                            <dd className="mt-0.5 text-lg font-semibold wrap-break-word">{infoArtist.name}</dd>
                         </div>
-                        <div className="grid grid-cols-1 gap-4">
-                            {infoArtist.twitter && (
-                                <div>
-                                    <h3 className="text-sm font-bold text-muted-foreground uppercase tracking-wider">Twitter</h3>
-                                    <a href={infoArtist.twitter} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-all">{infoArtist.twitter}</a>
+                        {ARTIST_LINKS.map(({ key, label }) => {
+                            const url = infoArtist[key];
+                            if (!url) return null;
+                            return (
+                                <div key={key}>
+                                    <dt className="text-sm text-muted-foreground">{label}</dt>
+                                    <dd className="mt-0.5">
+                                        <SafeExternalLink
+                                            href={url}
+                                            className="font-medium text-brand-ink break-all hover:underline"
+                                            fallback={<span className="break-all text-muted-foreground">{url}</span>}
+                                        >
+                                            {url}
+                                        </SafeExternalLink>
+                                    </dd>
                                 </div>
-                            )}
-                            {infoArtist.pixiv && (
-                                <div>
-                                    <h3 className="text-sm font-bold text-muted-foreground uppercase tracking-wider">Pixiv</h3>
-                                    <a href={infoArtist.pixiv} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-all">{infoArtist.pixiv}</a>
-                                </div>
-                            )}
-                            {infoArtist.deviantArt && (
-                                <div>
-                                    <h3 className="text-sm font-bold text-muted-foreground uppercase tracking-wider">DeviantArt</h3>
-                                    <a href={infoArtist.deviantArt} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-all">{infoArtist.deviantArt}</a>
-                                </div>
-                            )}
-                            {infoArtist.patreon && (
-                                <div>
-                                    <h3 className="text-sm font-bold text-muted-foreground uppercase tracking-wider">Patreon</h3>
-                                    <a href={infoArtist.patreon} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-all">{infoArtist.patreon}</a>
-                                </div>
-                            )}
-                        </div>
-                        <div className="pt-4 border-t border-border flex justify-end">
-                            <Link to={`/gallery?includedArtists=${infoArtist.id}`} className="px-4 py-2 bg-primary text-primary-foreground rounded-lg font-bold hover:opacity-90">
-                                View Gallery
-                            </Link>
-                        </div>
-                    </div>
+                            );
+                        })}
+                    </dl>
                 )}
             </Modal>
         </div>

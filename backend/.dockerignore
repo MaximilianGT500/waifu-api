@@ -1,7 +1,10 @@
 .git
 .env
+.env.*
 docs
 frontend
 *.md
 Dockerfile
 .dockerignore
+**/*_test.go
+**/testdata

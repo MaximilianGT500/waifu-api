@@ -1,72 +1,59 @@
-﻿import { getEnv } from '../utils/env';
+import { getEnv } from '../utils/env';
 import { Mail, MessageSquare } from 'lucide-react';
 import { MetaTags } from '../hooks/useMetaTags';
+import ExternalLink from '../components/ExternalLink';
+import { safeExternalUrl, safeMailto } from '../utils/safeUrl';
 
 const Contact = () => {
-    const contactEmail = getEnv('VITE_CONTACT_EMAIL');
-    const discordServerUrl = getEnv('VITE_DISCORD_SERVER_URL');
+    const contactEmail = getEnv('VITE_CONTACT_EMAIL')?.trim();
+    const mailto = safeMailto(contactEmail);
+    const discordServerUrl = safeExternalUrl(getEnv('VITE_DISCORD_SERVER_URL'));
 
-    if (!contactEmail && !discordServerUrl) {
+    if (!mailto && !discordServerUrl) {
         return (
-            <div className="flex flex-col items-center justify-center min-h-[60vh] p-4 text-center">
-                <h1 className="text-2xl font-bold mb-2">Contact Information Unavailable</h1>
-                <p className="text-muted-foreground">No contact details have been configured for this instance.</p>
+            <div className="page-narrow">
+                <h1 className="page-title">Contact</h1>
+                <p className="page-lede">No contact details have been configured for this instance.</p>
             </div>
         );
     }
 
     return (
-        <div className="container mx-auto px-4 py-12 max-w-4xl">
+        <div className="page-narrow">
             <MetaTags
               title="Contact"
               description="Get in touch with us for questions, suggestions, or support."
             />
-            <div className="text-center mb-12">
-                <h1 className="text-4xl font-black mb-4 bg-gradient-to-r from-primary to-purple-600 bg-clip-text text-transparent">
-                    Get in Touch
-                </h1>
-                <p className="text-xl text-muted-foreground">
-                    Have questions, suggestions, or need support? We're here to help!
-                </p>
-            </div>
+            <header className="mb-10">
+                <h1 className="page-title">Get in Touch</h1>
+                <p className="page-lede">Questions about the API, a takedown request or an idea? Reach us here.</p>
+            </header>
 
-            <div className="grid md:grid-cols-2 gap-6 max-w-2xl mx-auto">
-                {contactEmail && (
-                    <a 
-                        href={`mailto:${contactEmail}`}
-                        className="group flex flex-col items-center p-8 bg-card border border-border rounded-2xl hover:border-primary/50 hover:shadow-lg hover:shadow-primary/5 transition-all duration-300"
-                    >
-                        <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-300">
-                            <Mail size={32} className="text-primary" />
-                        </div>
-                        <h2 className="text-xl font-bold mb-2">Email Support</h2>
-                        <p className="text-muted-foreground text-center mb-4">
-                            Send us an email and we'll get back to you as soon as possible.
-                        </p>
-                        <span className="text-primary font-medium group-hover:underline">
-                            {contactEmail}
+            <div className="grid gap-4 sm:grid-cols-2">
+                {mailto && (
+                    <a href={mailto} className="panel group flex flex-col p-6 transition-[border-color,box-shadow] hover:border-brand/40 hover:shadow-float">
+                        <span className="mb-5 grid size-11 place-items-center rounded-2xl bg-brand-soft text-brand-ink" aria-hidden="true">
+                            <Mail size={20} />
                         </span>
+                        <h2 className="section-title">Email</h2>
+                        <p className="mt-1 flex-1 text-sm text-muted-foreground">We usually answer within a few days.</p>
+                        <span className="mt-4 font-semibold text-brand-ink break-all group-hover:underline">{contactEmail}</span>
                     </a>
                 )}
 
                 {discordServerUrl && (
-                    <a 
+                    <ExternalLink
                         href={discordServerUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="group flex flex-col items-center p-8 bg-card border border-border rounded-2xl hover:border-[#5865F2]/50 hover:shadow-lg hover:shadow-[#5865F2]/5 transition-all duration-300"
+                        trusted
+                        className="panel group flex flex-col p-6 transition-[border-color,box-shadow] hover:border-[#5865F2]/50 hover:shadow-float"
                     >
-                        <div className="w-16 h-16 rounded-full bg-[#5865F2]/10 flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-300">
-                            <MessageSquare size={32} className="text-[#5865F2]" />
-                        </div>
-                        <h2 className="text-xl font-bold mb-2">Discord Community</h2>
-                        <p className="text-muted-foreground text-center mb-4">
-                            Join our community server for real-time support and discussions.
-                        </p>
-                        <span className="text-[#5865F2] font-medium group-hover:underline">
-                            Join Server
+                        <span className="mb-5 grid size-11 place-items-center rounded-2xl bg-[#5865F2]/12 text-[#5865F2]" aria-hidden="true">
+                            <MessageSquare size={20} />
                         </span>
-                    </a>
+                        <h2 className="section-title">Discord community</h2>
+                        <p className="mt-1 flex-1 text-sm text-muted-foreground">Real-time help and discussions with other users.</p>
+                        <span className="mt-4 font-semibold text-[#5865F2] group-hover:underline dark:text-[#8b95f7]">Join the server</span>
+                    </ExternalLink>
                 )}
             </div>
         </div>

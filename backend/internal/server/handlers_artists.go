@@ -1,11 +1,11 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/waifu-im/waifu-api/backend/internal/auth"
@@ -20,133 +20,144 @@ func (s *Server) RegisterArtistRoutes() {
 	s.Handle("DELETE /artists/{id}", s.RequireRole("Admin")(http.HandlerFunc(s.handleDeleteArtist)))
 }
 
-func (s *Server) artistVisibility(r *http.Request, ident *auth.Identity) (string, bool) {
-	rs := r.URL.Query().Get("reviewStatus")
-	includeMyPending := queryBool(r, "includeMyPending", false)
-	if rs == "" || strings.EqualFold(rs, "Accepted") {
-		if includeMyPending && ident != nil {
-			return fmt.Sprintf(`(a."ReviewStatus" = 1 OR (a."ReviewStatus" = 0 AND a."CreatorId" = %d))`, ident.UserID), true
-		}
-		return `a."ReviewStatus" = 1`, true
-	}
-	if !isModerator(ident) {
-		return "", false
-	}
-	switch {
-	case strings.EqualFold(rs, "Pending"):
-		return `a."ReviewStatus" = 0`, true
-	case strings.EqualFold(rs, "All"):
-		return `TRUE`, true
-	default:
-		return "", false
-	}
-}
+const artistCountJoin = ` CROSS JOIN LATERAL (
+		SELECT COUNT(*) AS cnt
+		FROM "ArtistImage" cai JOIN "Images" ci ON ci."Id" = cai."ImagesId" AND ci."ReviewStatus" = 1
+		WHERE cai."ArtistsId" = a."Id"
+	) ac`
 
-func (s *Server) handleListArtists(w http.ResponseWriter, r *http.Request) {
-	ident := IdentityFromContext(r.Context())
-	rs := r.URL.Query().Get("reviewStatus")
-	if rs != "" {
-		valid := strings.EqualFold(rs, "Accepted") || strings.EqualFold(rs, "Pending") || strings.EqualFold(rs, "All")
-		if !valid {
-			invalidEnumProblem(w, r, "reviewStatus", rs)
-			return
-		}
-	}
-	vis, ok := s.artistVisibility(r, ident)
-	if !ok {
-		Forbidden(w, r, "Filtering by non-accepted review status is only available to moderators and admins.")
-		return
-	}
-	page, pageSize := paginationParams(r, s.cfg.PageSizes.ArtistDefault, s.cfg.PageSizes.ArtistMax)
-	name := r.URL.Query().Get("name")
-	includedIDs, _ := parseLongList(repeatedQuery(r, "includedIds"))
+const artistCountAggregateJoin = ` LEFT JOIN (
+		SELECT cai."ArtistsId" AS aid, COUNT(*) AS cnt
+		FROM "ArtistImage" cai JOIN "Images" ci ON ci."Id" = cai."ImagesId" AND ci."ReviewStatus" = 1
+		GROUP BY cai."ArtistsId"
+	) ac ON ac.aid = a."Id"`
 
-	countExpr := `(SELECT COUNT(*) FROM "ArtistImage" ai JOIN "Images" i ON i."Id" = ai."ImagesId" AND i."ReviewStatus" = 1 WHERE ai."ArtistsId" = a."Id")`
+const artistUsageQuery = `
+	SELECT cai."ArtistsId", COUNT(*)
+	FROM "ArtistImage" cai JOIN "Images" ci ON ci."Id" = cai."ImagesId" AND ci."ReviewStatus" = 1
+	GROUP BY cai."ArtistsId"`
 
-	if len(includedIDs) > 0 {
-		query := fmt.Sprintf(`
-			SELECT a."Id", a."Name", a."Patreon", a."Pixiv", a."Twitter", a."DeviantArt", a."ReviewStatus", a."CreatorId", %s
-			FROM "Artists" a WHERE a."Id" = ANY($1)`, countExpr)
-		rows, err := s.db.Query(r.Context(), query, includedIDs)
-		if err != nil {
-			InternalError(w, r, s.log, err)
-			return
-		}
-		defer rows.Close()
-		items := []artistDto{}
-		for rows.Next() {
-			var a artistDto
-			var rs int
-			var patreon, pixiv, twitter, deviantArt *string
-			if err := rows.Scan(&a.ID, &a.Name, &patreon, &pixiv, &twitter, &deviantArt, &rs, &a.CreatorID, &a.ImageCount); err != nil {
-				InternalError(w, r, s.log, err)
-				return
-			}
-			a.ReviewStatus = reviewStatusString(rs)
-			a.Patreon = orEmpty(patreon)
-			a.Pixiv = orEmpty(pixiv)
-			a.Twitter = orEmpty(twitter)
-			a.DeviantArt = orEmpty(deviantArt)
-			if !isModerator(ident) {
-				a.CreatorID = nil
-			}
-			items = append(items, a)
-		}
-		writeJSON(w, http.StatusOK, newPaginated(items, 1, len(items), int64(len(items)), s.cfg.PageSizes.ArtistMax, s.cfg.PageSizes.ArtistDefault))
-		return
-	}
+const artistListColumns = `a."Id", a."Name", a."Patreon", a."Pixiv", a."Twitter", a."DeviantArt", a."ReviewStatus", a."CreatorId", COALESCE(ac.cnt, 0)`
 
-	where := " WHERE " + vis
-	args := []any{}
-	ph := func() string { return fmt.Sprintf("$%d", len(args)+1) }
-	if name != "" {
-		where += fmt.Sprintf(` AND lower(a."Name") LIKE %s`, ph())
-		args = append(args, "%"+strings.ToLower(name)+"%")
-	}
-
-	var total int64
-	if err := s.db.QueryRow(r.Context(), `SELECT COUNT(*) FROM "Artists" a`+where, args...).Scan(&total); err != nil {
-		InternalError(w, r, s.log, err)
-		return
-	}
-
-	query := fmt.Sprintf(`
-		SELECT a."Id", a."Name", a."Patreon", a."Pixiv", a."Twitter", a."DeviantArt", a."ReviewStatus", a."CreatorId", %s
-		FROM "Artists" a%s
-		ORDER BY %s DESC`, countExpr, where, countExpr)
-	query += fmt.Sprintf(" LIMIT %d OFFSET %d", pageSize, (page-1)*pageSize)
-
-	rows, err := s.db.Query(r.Context(), query, args...)
-	if err != nil {
-		InternalError(w, r, s.log, err)
-		return
-	}
+func scanArtistRows(rows pgx.Rows, ident *auth.Identity) ([]artistDto, error) {
 	defer rows.Close()
-
 	items := []artistDto{}
 	for rows.Next() {
 		var a artistDto
 		var rs int
 		var patreon, pixiv, twitter, deviantArt *string
 		if err := rows.Scan(&a.ID, &a.Name, &patreon, &pixiv, &twitter, &deviantArt, &rs, &a.CreatorID, &a.ImageCount); err != nil {
-			InternalError(w, r, s.log, err)
-			return
+			return nil, err
 		}
 		a.ReviewStatus = reviewStatusString(rs)
 		a.Patreon = orEmpty(patreon)
 		a.Pixiv = orEmpty(pixiv)
 		a.Twitter = orEmpty(twitter)
 		a.DeviantArt = orEmpty(deviantArt)
-		if !isModerator(ident) {
+		if !isModerator(ident) && !(ident != nil && a.CreatorID != nil && *a.CreatorID == ident.UserID) {
 			a.CreatorID = nil
 		}
 		items = append(items, a)
 	}
+	return items, rows.Err()
+}
 
-	writeJSON(w, http.StatusOK, newPaginated(items, page, pageSize, total, s.cfg.PageSizes.ArtistMax, s.cfg.PageSizes.ArtistDefault))
+func (s *Server) handleListArtists(w http.ResponseWriter, r *http.Request) {
+	ident := IdentityFromContext(r.Context())
+	ctx := r.Context()
+	rs := queryGet(r, "reviewStatus")
+	if !validReviewStatusFilter(rs) {
+		invalidEnumProblem(w, r, "reviewStatus", rs)
+		return
+	}
+	includedIDs, err := s.idListParam(r, "includedIds")
+	if err != nil {
+		BadRequest(w, r, err.Error())
+		return
+	}
+
+	if len(includedIDs) > 0 {
+		if _, ok := lookupVisibility(r, ident, "a", &sqlArgs{}); !ok {
+			Forbidden(w, r, "Filtering by non-accepted review status is only available to moderators and admins.")
+			return
+		}
+		usage, err := s.loadUsage(ctx, "artists", artistUsageQuery)
+		if err != nil {
+			InternalError(w, r, s.log, err)
+			return
+		}
+		a := &sqlArgs{}
+		join := artistCountJoin
+		if usage != nil {
+			join = usageJoin("ac", "a", a.add(usage.ids), a.add(usage.counts))
+		}
+		vis, _ := lookupVisibility(r, ident, "a", a)
+		rows, err := s.db.Query(ctx, `SELECT `+artistListColumns+` FROM "Artists" a`+join+
+			` WHERE a."Id" = ANY(`+a.add(includedIDs)+`) AND `+vis+` ORDER BY a."Id"`, a.args...)
+		if err != nil {
+			InternalError(w, r, s.log, err)
+			return
+		}
+		items, err := scanArtistRows(rows, ident)
+		if err != nil {
+			InternalError(w, r, s.log, err)
+			return
+		}
+		writePublicJSON(w, r, s.newPaginated(items, 1, len(items), int64(len(items)), s.cfg.PageSizes.ArtistMax, s.cfg.PageSizes.ArtistDefault))
+		return
+	}
+
+	if _, ok := contentVisibility(r, ident, "a", &sqlArgs{}); !ok {
+		Forbidden(w, r, "Filtering by non-accepted review status is only available to moderators and admins.")
+		return
+	}
+	page, pageSize := s.paginationParams(r, s.cfg.PageSizes.ArtistDefault, s.cfg.PageSizes.ArtistMax)
+	name := strings.TrimSpace(queryGet(r, "name"))
+	filter := func(a *sqlArgs) string {
+		vis, _ := contentVisibility(r, ident, "a", a)
+		where := " WHERE " + vis
+		if name != "" {
+			where += ` AND lower(a."Name") LIKE ` + a.add(likePattern(strings.ToLower(name)))
+		}
+		return where
+	}
+
+	usage, err := s.loadUsage(ctx, "artists", artistUsageQuery)
+	if err != nil {
+		InternalError(w, r, s.log, err)
+		return
+	}
+	countArgs := &sqlArgs{}
+	countWhere := filter(countArgs)
+	listArgs := &sqlArgs{}
+	join := artistCountAggregateJoin
+	if usage != nil {
+		join = usageJoin("ac", "a", listArgs.add(usage.ids), listArgs.add(usage.counts))
+	}
+	listWhere := filter(listArgs)
+
+	var total int64
+	var items []artistDto
+	b := &pgx.Batch{}
+	b.Queue(`SELECT COUNT(*) FROM "Artists" a`+countWhere, countArgs.args...).QueryRow(func(row pgx.Row) error {
+		return row.Scan(&total)
+	})
+	b.Queue(`SELECT `+artistListColumns+` FROM "Artists" a`+join+listWhere+
+		` ORDER BY COALESCE(ac.cnt, 0) DESC, a."Id" ASC`+
+		fmt.Sprintf(" LIMIT %d OFFSET %d", pageSize, offsetOf(page, pageSize)), listArgs.args...).Query(func(rows pgx.Rows) error {
+		var err error
+		items, err = scanArtistRows(rows, ident)
+		return err
+	})
+	if err := s.db.SendBatch(ctx, b).Close(); err != nil {
+		InternalError(w, r, s.log, err)
+		return
+	}
+	writePublicJSON(w, r, s.newPaginated(items, page, pageSize, total, s.cfg.PageSizes.ArtistMax, s.cfg.PageSizes.ArtistDefault))
 }
 
 func (s *Server) handleGetArtist(w http.ResponseWriter, r *http.Request) {
+	ident := IdentityFromContext(r.Context())
 	id, err := parseID(r.PathValue("id"))
 	if err != nil {
 		RouteNotFound(w, r)
@@ -155,11 +166,12 @@ func (s *Server) handleGetArtist(w http.ResponseWriter, r *http.Request) {
 	var a artistDto
 	var rs int
 	var patreon, pixiv, twitter, deviantArt *string
+	var creatorID *int64
 	err = s.db.QueryRow(r.Context(), `
-		SELECT a."Id", a."Name", a."Patreon", a."Pixiv", a."Twitter", a."DeviantArt", a."ReviewStatus"
+		SELECT a."Id", a."Name", a."Patreon", a."Pixiv", a."Twitter", a."DeviantArt", a."ReviewStatus", a."CreatorId"
 		FROM "Artists" a WHERE a."Id" = $1`, id).
-		Scan(&a.ID, &a.Name, &patreon, &pixiv, &twitter, &deviantArt, &rs)
-	if errors.Is(err, pgx.ErrNoRows) {
+		Scan(&a.ID, &a.Name, &patreon, &pixiv, &twitter, &deviantArt, &rs, &creatorID)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !canSeeContent(ident, rs, creatorID)) {
 		NotFound(w, r, fmt.Sprintf("Artist with ID %d not found.", id))
 		return
 	}
@@ -172,19 +184,23 @@ func (s *Server) handleGetArtist(w http.ResponseWriter, r *http.Request) {
 	a.Pixiv = orEmpty(pixiv)
 	a.Twitter = orEmpty(twitter)
 	a.DeviantArt = orEmpty(deviantArt)
-
-	writeJSON(w, http.StatusOK, a)
+	writePublicJSON(w, r, a)
 }
 
 func (s *Server) handleGetArtistByName(w http.ResponseWriter, r *http.Request) {
+	ident := IdentityFromContext(r.Context())
 	name := r.PathValue("name")
+	if runeLen(name) > 100 {
+		NotFound(w, r, "Artist not found.")
+		return
+	}
 	var a artistEntity
 	var rs int
 	err := s.db.QueryRow(r.Context(), `
 		SELECT "Id","Name","Patreon","Pixiv","Twitter","DeviantArt","ReviewStatus","CreatorId"
-		FROM "Artists" WHERE "Name" = $1`, name).
+		FROM "Artists" WHERE "Name" = $1 ORDER BY "Id" LIMIT 1`, name).
 		Scan(&a.ID, &a.Name, &a.Patreon, &a.Pixiv, &a.Twitter, &a.DeviantArt, &rs, &a.CreatorID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !canSeeContent(ident, rs, a.CreatorID)) {
 		NotFound(w, r, fmt.Sprintf("Artist with name '%s' not found.", name))
 		return
 	}
@@ -192,9 +208,12 @@ func (s *Server) handleGetArtistByName(w http.ResponseWriter, r *http.Request) {
 		InternalError(w, r, s.log, err)
 		return
 	}
+	if !isModerator(ident) && !(ident != nil && a.CreatorID != nil && *a.CreatorID == ident.UserID) {
+		a.CreatorID = nil
+	}
 	a.ReviewStatus = reviewStatusString(rs)
 	a.Images = []imageDto{}
-	writeJSON(w, http.StatusOK, a)
+	writePublicJSON(w, r, a)
 }
 
 type artistUpsertRequest struct {
@@ -211,20 +230,22 @@ func validateArtistRequest(req *artistUpsertRequest) map[string][]string {
 	errs := map[string][]string{}
 	if strings.TrimSpace(req.Name) == "" {
 		errs["Name"] = append(errs["Name"], "Name is required.")
-	} else if len(req.Name) > 30 {
+	} else if runeLen(strings.TrimSpace(req.Name)) > 30 {
 		errs["Name"] = append(errs["Name"], "Name must not exceed 30 characters.")
 	}
-	for field, v := range map[string]*string{
-		"Patreon": req.Patreon, "Pixiv": req.Pixiv, "Twitter": req.Twitter, "DeviantArt": req.DeviantArt,
-	} {
-		if v == nil || *v == "" {
+	for _, f := range []struct {
+		field string
+		v     *string
+	}{{"Patreon", req.Patreon}, {"Pixiv", req.Pixiv}, {"Twitter", req.Twitter}, {"DeviantArt", req.DeviantArt}} {
+		if f.v == nil || strings.TrimSpace(*f.v) == "" {
 			continue
 		}
-		if len(*v) > 200 {
-			errs[field] = append(errs[field], field+" link must not exceed 200 characters.")
+		v := strings.TrimSpace(*f.v)
+		if runeLen(v) > 200 {
+			errs[f.field] = append(errs[f.field], f.field+" link must not exceed 200 characters.")
 		}
-		if !isAbsoluteURL(*v) {
-			errs[field] = append(errs[field], field+" link must be a valid URL.")
+		if !isValidWebURL(v) {
+			errs[f.field] = append(errs[f.field], f.field+" link must be a valid http(s) URL.")
 		}
 	}
 	return errs
@@ -244,8 +265,48 @@ func normalizeArtistLinks(req *artistUpsertRequest) (patreon, pixiv, twitter, de
 	return norm(req.Patreon), norm(req.Pixiv), norm(req.Twitter), norm(req.DeviantArt)
 }
 
+type artistConflictCheck struct {
+	field  string
+	value  *string
+	column string
+}
+
+func artistConflicts(name string, patreon, pixiv, twitter, deviantArt *string) []artistConflictCheck {
+	return []artistConflictCheck{
+		{"Name", strPtr(name), `lower("Name") = lower($1)`},
+		{"Patreon", patreon, `"Patreon" = $1`},
+		{"Pixiv", pixiv, `"Pixiv" = $1`},
+		{"Twitter", twitter, `"Twitter" = $1`},
+		{"DeviantArt", deviantArt, `"DeviantArt" = $1`},
+	}
+}
+
+func checkArtistConflicts(ctx context.Context, q querier, excludeID int64, name string, patreon, pixiv, twitter, deviantArt *string) error {
+	for _, c := range artistConflicts(name, patreon, pixiv, twitter, deviantArt) {
+		if c.value == nil || *c.value == "" {
+			continue
+		}
+		var exists bool
+		query := fmt.Sprintf(`SELECT EXISTS(SELECT 1 FROM "Artists" WHERE %s AND "Id" <> $2)`, c.column)
+		if err := q.QueryRow(ctx, query, *c.value, excludeID).Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			if c.field == "Name" {
+				return errConflict(fmt.Sprintf("Artist with name '%s' already exists.", name))
+			}
+			if excludeID == 0 {
+				return errConflict(fmt.Sprintf("Artist with %s '%s' already exists.", c.field, *c.value))
+			}
+			return errConflict(fmt.Sprintf("%s link is already used by another artist.", c.field))
+		}
+	}
+	return nil
+}
+
 func (s *Server) handleCreateArtist(w http.ResponseWriter, r *http.Request) {
 	ident := IdentityFromContext(r.Context())
+	ctx := r.Context()
 	if !requireMinRole(ident, s.cfg.Permissions.ArtistCreationMinRole) {
 		s.permissionRoleForbidden(w, r, s.cfg.Permissions.ArtistCreationMinRole, auth.RoleUser)
 		return
@@ -265,71 +326,47 @@ func (s *Server) handleCreateArtist(w http.ResponseWriter, r *http.Request) {
 	trimmedName := strings.TrimSpace(req.Name)
 	patreon, pixiv, twitter, deviantArt := normalizeArtistLinks(&req)
 
-	conflicts := []struct {
-		field  string
-		value  *string
-		column string
-	}{
-		{"Name", strPtr(trimmedName), `lower("Name") = lower($1)`},
-		{"Patreon", patreon, `"Patreon" = $1`},
-		{"Pixiv", pixiv, `"Pixiv" = $1`},
-		{"Twitter", twitter, `"Twitter" = $1`},
-		{"DeviantArt", deviantArt, `"DeviantArt" = $1`},
-	}
-	for _, c := range conflicts {
-		if c.value == nil || *c.value == "" {
-			continue
-		}
-		var existing string
-		query := fmt.Sprintf(`SELECT "Name" FROM "Artists" WHERE %s LIMIT 1`, c.column)
-		if err := s.db.QueryRow(r.Context(), query, *c.value).Scan(&existing); err == nil && existing != "" {
-			if c.field == "Name" {
-				Conflict(w, r, fmt.Sprintf("Artist with name '%s' already exists.", trimmedName))
-			} else {
-				Conflict(w, r, fmt.Sprintf("Artist with %s '%s' already exists.", c.field, *c.value))
-			}
-			return
-		}
-	}
-
+	autoAccept := !s.cfg.Review.RequireArtistReview || auth.ReviewBypassed(ident.Role, s.cfg.Review.ArtistReviewBypassMinRole)
 	reviewStatus := 0
-	if !s.cfg.Review.RequireArtistReview || auth.ReviewBypassed(ident.Role, s.cfg.Review.ArtistReviewBypassMinRole) {
+	if autoAccept {
 		reviewStatus = 1
 	}
 
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		InternalError(w, r, s.log, err)
-		return
-	}
-	defer tx.Rollback(r.Context())
-
 	var a artistEntity
-	err = tx.QueryRow(r.Context(), `
-		INSERT INTO "Artists" ("Name","Patreon","Pixiv","Twitter","DeviantArt","ReviewStatus","CreatorId")
-		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING "Id"`,
-		trimmedName, patreon, pixiv, twitter, deviantArt, reviewStatus, ident.UserID).Scan(&a.ID)
-	if err != nil {
-		InternalError(w, r, s.log, err)
-		return
-	}
-
-	now := time.Now().UTC()
-	if reviewStatus == 1 {
-		_, err = tx.Exec(r.Context(), `
-			INSERT INTO "ReviewTasks" ("Kind","TargetType","TargetId","SubmitterId","Status","ReviewerNote","CreatedAt","ResolvedAt")
-			VALUES (0,2,$1,$2,1,'Auto-accepted (trusted role).',$3,$3)`, a.ID, ident.UserID, now)
-	} else {
-		_, err = tx.Exec(r.Context(), `
+	err := pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
+		if !autoAccept {
+			if err := s.checkPendingSubmissions(ctx, tx, ident.UserID); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('artists'))`); err != nil {
+			return err
+		}
+		if err := checkArtistConflicts(ctx, tx, 0, trimmedName, patreon, pixiv, twitter, deviantArt); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO "Artists" ("Name","Patreon","Pixiv","Twitter","DeviantArt","ReviewStatus","CreatorId")
+			VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING "Id"`,
+			trimmedName, patreon, pixiv, twitter, deviantArt, reviewStatus, ident.UserID).Scan(&a.ID); err != nil {
+			if isUniqueViolation(err) {
+				return errConflict(fmt.Sprintf("Artist with name '%s' already exists.", trimmedName))
+			}
+			return err
+		}
+		if autoAccept {
+			_, err := tx.Exec(ctx, `
+				INSERT INTO "ReviewTasks" ("Kind","TargetType","TargetId","SubmitterId","Status","ReviewerNote","CreatedAt","ResolvedAt")
+				VALUES (0,2,$1,$2,1,'Auto-accepted (trusted role).',now(),now())`, a.ID, ident.UserID)
+			return err
+		}
+		_, err := tx.Exec(ctx, `
 			INSERT INTO "ReviewTasks" ("Kind","TargetType","TargetId","SubmitterId","Status","CreatedAt")
-			VALUES (0,2,$1,$2,0,$3)`, a.ID, ident.UserID, now)
-	}
+			VALUES (0,2,$1,$2,0,now())`, a.ID, ident.UserID)
+		return err
+	})
 	if err != nil {
-		InternalError(w, r, s.log, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		InternalError(w, r, s.log, err)
+		s.writeDomainError(w, r, err)
 		return
 	}
 
@@ -345,18 +382,12 @@ func (s *Server) handleCreateArtist(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, a)
 }
 
-func strPtr(s string) *string { return &s }
-
 func (s *Server) handlePatchArtist(w http.ResponseWriter, r *http.Request) {
+	ident := IdentityFromContext(r.Context())
+	ctx := r.Context()
 	id, err := parseID(r.PathValue("id"))
 	if err != nil {
 		RouteNotFound(w, r)
-		return
-	}
-	var exists bool
-	_ = s.db.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM "Artists" WHERE "Id" = $1)`, id).Scan(&exists)
-	if !exists {
-		NotFound(w, r, fmt.Sprintf("Artist with ID %d not found.", id))
 		return
 	}
 
@@ -384,67 +415,64 @@ func (s *Server) handlePatchArtist(w http.ResponseWriter, r *http.Request) {
 	trimmedName := strings.TrimSpace(req.Name)
 	patreon, pixiv, twitter, deviantArt := normalizeArtistLinks(&req)
 
-	conflicts := []struct {
-		field  string
-		value  *string
-		column string
-	}{
-		{"Name", strPtr(trimmedName), `lower("Name") = lower($1)`},
-		{"Patreon", patreon, `"Patreon" = $1`},
-		{"Pixiv", pixiv, `"Pixiv" = $1`},
-		{"Twitter", twitter, `"Twitter" = $1`},
-		{"DeviantArt", deviantArt, `"DeviantArt" = $1`},
-	}
-	for _, c := range conflicts {
-		if c.value == nil || *c.value == "" {
-			continue
+	err = pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
+		if err := lockPendingTasks(ctx, tx, 2, id); err != nil {
+			return err
 		}
-		var conflictID int64
-		query := fmt.Sprintf(`SELECT "Id" FROM "Artists" WHERE %s AND "Id" <> $2 LIMIT 1`, c.column)
-		if err := s.db.QueryRow(r.Context(), query, *c.value, id).Scan(&conflictID); err == nil && conflictID != 0 {
-			if c.field == "Name" {
-				Conflict(w, r, fmt.Sprintf("Artist with name '%s' already exists.", trimmedName))
-			} else {
-				Conflict(w, r, fmt.Sprintf("%s link is already used by another artist.", c.field))
+		var lockedID int64
+		if err := tx.QueryRow(ctx, `SELECT "Id" FROM "Artists" WHERE "Id" = $1 FOR UPDATE`, id).Scan(&lockedID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return errNotFound(fmt.Sprintf("Artist with ID %d not found.", id))
 			}
+			return err
+		}
+		if err := checkArtistConflicts(ctx, tx, id, trimmedName, patreon, pixiv, twitter, deviantArt); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE "Artists" SET "Name" = $1, "Patreon" = $2, "Pixiv" = $3, "Twitter" = $4, "DeviantArt" = $5
+			WHERE "Id" = $6`,
+			trimmedName, patreon, pixiv, twitter, deviantArt, id); err != nil {
+			return err
+		}
+		if reviewStatus != "" {
+			rs := 0
+			if reviewStatus == "Accepted" {
+				rs = 1
+			}
+			if _, err := tx.Exec(ctx, `UPDATE "Artists" SET "ReviewStatus" = $1 WHERE "Id" = $2`, rs, id); err != nil {
+				return err
+			}
+			if rs == 1 {
+				if _, err := tx.Exec(ctx, `
+					UPDATE "ReviewTasks" SET "Status" = 1, "ReviewerId" = $2, "ResolvedAt" = now()
+					WHERE "TargetType" = 2 AND "TargetId" = $1 AND "Kind" = 0 AND "Status" = 0`, id, ident.UserID); err != nil {
+					return err
+				}
+			}
+		}
+		if req.CreatorID != nil {
+			if _, err := tx.Exec(ctx, `UPDATE "Artists" SET "CreatorId" = $1 WHERE "Id" = $2`, *req.CreatorID, id); err != nil {
+				if isForeignKeyViolation(err) {
+					return errNotFound(fmt.Sprintf("User with ID %d not found.", *req.CreatorID))
+				}
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		if isUniqueViolation(err) {
+			Conflict(w, r, "An artist with this name or link already exists.")
 			return
 		}
-	}
-
-	if _, err := s.db.Exec(r.Context(), `
-		UPDATE "Artists" SET "Name" = $1, "Patreon" = $2, "Pixiv" = $3, "Twitter" = $4, "DeviantArt" = $5
-		WHERE "Id" = $6`,
-		trimmedName, patreon, pixiv, twitter, deviantArt, id); err != nil {
-		InternalError(w, r, s.log, err)
+		s.writeDomainError(w, r, err)
 		return
-	}
-
-	if reviewStatus != "" {
-		rs := 0
-		if reviewStatus == "Accepted" {
-			rs = 1
-		}
-		if _, err := s.db.Exec(r.Context(), `UPDATE "Artists" SET "ReviewStatus" = $1 WHERE "Id" = $2`, rs, id); err != nil {
-			InternalError(w, r, s.log, err)
-			return
-		}
-		if reviewStatus == "Accepted" {
-
-			_, _ = s.db.Exec(r.Context(), `
-				UPDATE "ReviewTasks" SET "Status" = 1, "ResolvedAt" = now()
-				WHERE "TargetType" = 2 AND "TargetId" = $1 AND "Kind" = 0 AND "Status" = 0`, id)
-		}
-	}
-	if req.CreatorID != nil {
-		if _, err := s.db.Exec(r.Context(), `UPDATE "Artists" SET "CreatorId" = $1 WHERE "Id" = $2`, *req.CreatorID, id); err != nil {
-			InternalError(w, r, s.log, err)
-			return
-		}
 	}
 
 	var a artistEntity
 	var rs int
-	err = s.db.QueryRow(r.Context(), `
+	err = s.db.QueryRow(ctx, `
 		SELECT "Id","Name","Patreon","Pixiv","Twitter","DeviantArt","ReviewStatus","CreatorId"
 		FROM "Artists" WHERE "Id" = $1`, id).
 		Scan(&a.ID, &a.Name, &a.Patreon, &a.Pixiv, &a.Twitter, &a.DeviantArt, &rs, &a.CreatorID)
@@ -463,14 +491,13 @@ func (s *Server) handleDeleteArtist(w http.ResponseWriter, r *http.Request) {
 		RouteNotFound(w, r)
 		return
 	}
-	var exists bool
-	if err := s.db.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM "Artists" WHERE "Id" = $1)`, id).Scan(&exists); err != nil || !exists {
-		NotFound(w, r, fmt.Sprintf("Artist with ID %d not found.", id))
-		return
-	}
-	_, err = s.db.Exec(r.Context(), `DELETE FROM "Artists" WHERE "Id" = $1`, id)
+	res, err := s.db.Exec(r.Context(), `DELETE FROM "Artists" WHERE "Id" = $1`, id)
 	if err != nil {
 		InternalError(w, r, s.log, err)
+		return
+	}
+	if res.RowsAffected() == 0 {
+		NotFound(w, r, fmt.Sprintf("Artist with ID %d not found.", id))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

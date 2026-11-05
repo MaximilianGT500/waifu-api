@@ -1,32 +1,22 @@
-import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Role, User } from '../types';
+import { isAxiosError } from 'axios';
+import { ProblemDetails, Role, User } from '../types';
 import { useUser } from '../hooks/useUser';
+import { authExpiredBus, globalErrorBus } from '../services/eventBus';
+import { showApiError } from '../services/api';
+import { clearAuthStorage, decodeJwtPayload, getStoredToken, storeToken } from '../services/tokenStorage';
 
-/**
- * Decode a JWT token and extract the payload.
- * Returns null if the token is invalid.
- */
-function decodeJwtPayload(token: string): Record<string, unknown> | null {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const payload = atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'));
-    return JSON.parse(payload);
-  } catch {
-    return null;
-  }
+const ROLE_CLAIM = 'http://schemas.microsoft.com/ws/2008/06/identity/claims/role';
+
+function isBanResponse(status: number | undefined, data: unknown): boolean {
+  if (status !== 403 || !data || typeof data !== 'object') return false;
+  const problem = data as Partial<ProblemDetails>;
+  return problem.status === 403 && typeof problem.title === 'string';
 }
 
-/**
- * Extract the role from a JWT token.
- * The role claim is stored as "http://schemas.microsoft.com/ws/2008/06/identity/claims/role"
- */
 function getRoleFromToken(token: string): Role | null {
-  const payload = decodeJwtPayload(token);
-  if (!payload) return null;
-
-  const roleClaim = payload['http://schemas.microsoft.com/ws/2008/06/identity/claims/role'];
+  const roleClaim = decodeJwtPayload(token)?.[ROLE_CLAIM];
   if (typeof roleClaim === 'string' && Object.values(Role).includes(roleClaim as Role)) {
     return roleClaim as Role;
   }
@@ -40,70 +30,107 @@ interface AuthContextType {
   logout: () => void;
   isAuthenticated: boolean;
   isLoading: boolean;
-  /** True when the role in the JWT token differs from the role returned by the API */
   roleOutOfSync: boolean;
+  sessionError: boolean;
+  sessionEndedAt: number | null;
+  sessionRetrying: boolean;
+  retrySession: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
-  const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
+  const [token, setToken] = useState<string | null>(() => getStoredToken());
+  const tokenRef = useRef(token);
   const queryClient = useQueryClient();
 
-  // Use React Query to fetch user
-  const { data: user, isLoading: userLoading, isError } = useUser(!!token);
+  const { data: user, isLoading: userLoading, error: userError, refetch: refetchUser, isFetching: userFetching } = useUser(!!token);
 
-  // If no token, we are not loading (we are logged out).
-  // If token exists, we are loading until userLoading is false.
   const isLoading = !!token && userLoading;
 
-  // Check if the role in the token differs from the role in the API response
+  const userErrorStatus = isAxiosError(userError) ? userError.response?.status : undefined;
+  const banned = isAxiosError(userError) && isBanResponse(userError.response?.status, userError.response?.data);
+  const sessionError = !!token && !user && !!userError && userErrorStatus !== 401 && !banned;
+  const [sessionEndedAt, setSessionEndedAt] = useState<number | null>(null);
+  const retrySession = useCallback(() => {
+    void refetchUser();
+  }, [refetchUser]);
+
   const roleOutOfSync = useMemo(() => {
     if (!token || !user) return false;
     const tokenRole = getRoleFromToken(token);
     return tokenRole !== null && tokenRole !== user.role;
   }, [token, user]);
 
-  useEffect(() => {
-    if (token) {
-      localStorage.setItem('token', token);
-    } else {
-      localStorage.removeItem('token');
-    }
-  }, [token]);
+  const applyToken = useCallback(
+    (next: string | null) => {
+      if (tokenRef.current === next) return;
+      tokenRef.current = next;
+      queryClient.clear();
+      setToken(next);
+    },
+    [queryClient]
+  );
 
-  // Handle token expiration / invalid token
+  const login = useCallback(
+    (newToken: string) => {
+      storeToken(newToken);
+      applyToken(getStoredToken());
+    },
+    [applyToken]
+  );
+
+  const logout = useCallback(() => {
+    clearAuthStorage();
+    if (tokenRef.current) setSessionEndedAt(Date.now());
+    applyToken(null);
+  }, [applyToken]);
+
+  const expireSession = useCallback(() => {
+    if (!tokenRef.current) return;
+    logout();
+    globalErrorBus.emit({ type: 'warning', message: 'Your session has expired. Please log in again.' });
+  }, [logout]);
+
+  useEffect(() => authExpiredBus.subscribe(() => expireSession()), [expireSession]);
+
   useEffect(() => {
-    if (isError) {
-      console.log('User fetch failed, logging out.');
+    if (!userError || !isAxiosError<ProblemDetails>(userError)) return;
+    const status = userError.response?.status;
+    if (status === 401) expireSession();
+    else if (isBanResponse(status, userError.response?.data)) {
+      if (tokenRef.current) showApiError(userError);
       logout();
     }
-  }, [isError]);
+  }, [userError, expireSession, logout]);
 
-  const login = (newToken: string) => {
-    setToken(newToken);
-  };
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== null && event.key !== 'token') return;
+      applyToken(getStoredToken());
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [applyToken]);
 
-  const logout = () => {
-    setToken(null);
-    localStorage.removeItem('token');
-    // Drop all cached queries so no other user's data survives a logout/login.
-    queryClient.clear();
-  };
-
-  return (
-      <AuthContext.Provider value={{
-        token,
-        user: user || null,
-        login,
-        logout,
-        isAuthenticated: !!user,
-        isLoading,
-        roleOutOfSync
-      }}>
-        {children}
-      </AuthContext.Provider>
+  const value = useMemo<AuthContextType>(
+    () => ({
+      token,
+      user: user || null,
+      login,
+      logout,
+      isAuthenticated: !!token && !!user,
+      isLoading,
+      roleOutOfSync,
+      sessionError,
+      sessionRetrying: sessionError && userFetching,
+      retrySession,
+      sessionEndedAt,
+    }),
+    [token, user, login, logout, isLoading, roleOutOfSync, sessionError, userFetching, retrySession, sessionEndedAt]
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
 
 export const useAuth = () => {

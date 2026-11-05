@@ -1,4 +1,4 @@
-﻿import { SlidersHorizontal } from 'lucide-react';
+import { SlidersHorizontal } from 'lucide-react';
 
 interface FilterToggleButtonProps {
     isOpen: boolean;
@@ -6,16 +6,17 @@ interface FilterToggleButtonProps {
     className?: string;
 }
 
-const FilterToggleButton = ({ isOpen, onToggle, className = "" }: FilterToggleButtonProps) => {
-    return (
-        <button
-            onClick={onToggle}
-            className={`flex items-center gap-2 px-4 py-2 bg-card border border-border rounded-lg text-sm font-medium shadow-sm hover:bg-secondary transition-colors ${className}`}
-        >
-            <SlidersHorizontal size={16} />
-            <span className="hidden sm:inline">{isOpen ? 'Hide' : 'Filters'}</span>
-        </button>
-    );
-};
+const FilterToggleButton = ({ isOpen, onToggle, className = '' }: FilterToggleButtonProps) => (
+    <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={isOpen}
+        aria-label={isOpen ? 'Hide filters' : 'Show filters'}
+        className={`btn ${isOpen ? 'bg-brand-soft text-brand-ink ring-1 ring-brand/30 hover:bg-brand-soft' : 'btn-secondary'} ${className}`}
+    >
+        <SlidersHorizontal size={16} aria-hidden="true" />
+        <span className="hidden sm:inline">Filters</span>
+    </button>
+);
 
 export default FilterToggleButton;

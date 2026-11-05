@@ -1,4 +1,4 @@
-﻿export interface ImageDto {
+export interface ImageDto {
   id: number;
   signature: string;
   extension: string;
@@ -67,14 +67,13 @@ export interface AlbumDto {
 
 export interface ApiKeyDto {
   id: number;
-  key?: string; // Only present once at creation time
+  key?: string;
   description: string;
   createdAt: string;
   lastUsedAt?: string;
   expirationDate?: string;
 }
 
-// Matches backend ReportStatus enum
 export enum ReportStatus {
   Pending = 'Pending',
   Resolved = 'Resolved',
@@ -90,7 +89,6 @@ export interface Report {
   image?: ImageDto;
   description?: string;
   status: ReportStatus;
-  /** Optional moderator note recorded when the report was answered (validated/rejected). */
   reviewerNote?: string;
   createdAt: string;
 }
@@ -108,28 +106,24 @@ export enum ReviewStatus {
   Rejected = 'Rejected'
 }
 
-// Matches backend ReviewStatusFilter enum
 export enum ReviewStatusFilter {
   Accepted = 'Accepted',
   Pending = 'Pending',
   All = 'All'
 }
 
-// Matches backend NsfwMode enum
 export enum NsfwMode {
   False = 'False',
   True = 'True',
   All = 'All'
 }
 
-// Matches backend AnimatedMode enum
 export enum AnimatedMode {
   False = 'False',
   True = 'True',
   All = 'All'
 }
 
-// Matches backend Orientation enum
 export enum Orientation {
   All = 'All',
   Landscape = 'Landscape',
@@ -137,7 +131,6 @@ export enum Orientation {
   Square = 'Square'
 }
 
-// Matches backend ImageOrderBy enum
 export enum ImageOrderBy {
   Random = 'Random',
   UploadedAt = 'UploadedAt',
@@ -157,7 +150,7 @@ export interface PaginatedList<T> {
 }
 
 export interface ImageFormData {
-  file?: File;  // Optional file replacement
+  file?: File;
   source?: string;
   isNsfw: boolean;
   tags: string[];
@@ -173,23 +166,16 @@ export interface PublicStats {
     totalArtists: number;
 }
 
-/**
- * ASP.NET Core ProblemDetails response format
- * @see https://tools.ietf.org/html/rfc7807
- */
 export interface ProblemDetails {
     type?: string;
     title?: string;
     status?: number;
     detail?: string;
     instance?: string;
-    /** Validation errors by field name */
     errors?: Record<string, string[]>;
-    /** Generic message field (non-standard) */
     message?: string;
 }
 
-// Matches backend ReviewTaskStatus enum
 export enum ReviewTaskStatus {
   Pending = 'Pending',
   Approved = 'Approved',
@@ -197,13 +183,11 @@ export enum ReviewTaskStatus {
   Cancelled = 'Cancelled'
 }
 
-// Matches backend ReviewTaskKind enum
 export enum ReviewTaskKind {
   NewContent = 'NewContent',
   Edit = 'Edit'
 }
 
-// Matches backend ReviewableContentType enum
 export enum ReviewableContentType {
   Image = 'Image',
   Tag = 'Tag',
@@ -216,14 +200,12 @@ export interface UserMinimal {
   avatarUrl?: string;
 }
 
-/** The current state of a review task's target. Exactly one field is populated (all empty if deleted). */
 export interface ReviewTaskTarget {
   image?: ImageDto;
   tag?: Tag;
   artist?: Artist;
 }
 
-/** Proposed changes to an image (only changed fields are present). Tag/artist membership uses deltas. */
 export interface ImageEditPayload {
   source?: string;
   isNsfw?: boolean;
@@ -255,22 +237,18 @@ export interface ReviewTask {
   submitter?: UserMinimal;
   targetType: ReviewableContentType;
   targetId: number;
-  /** The proposed changes for Edit tasks (absent for NewContent). */
   payload?: EditPayload;
-  /** The current state of the target; undefined if it no longer exists (e.g. a rejected submission). */
   target?: ReviewTaskTarget;
   reason?: string;
   status: ReviewTaskStatus;
   reviewerId?: number;
   reviewer?: UserMinimal;
   reviewerNote?: string;
-  /** Set when a moderator (other than the submitter) edited this submission's content. */
   moderatorEditedAt?: string;
   createdAt: string;
   resolvedAt?: string;
 }
 
-/** Body sent to POST /review/tasks (submit an edit). */
 export interface SubmitEditBody {
   targetType: ReviewableContentType;
   targetId: number;
@@ -285,15 +263,12 @@ export enum BannerVariant {
   Danger = 'Danger'
 }
 
-/** The banner currently shown to visitors (GET /banner). */
 export interface Banner {
   message: string;
   variant: BannerVariant;
-  /** Dismissals are keyed on this, so an edited banner shows up again. */
   updatedAt: string;
 }
 
-/** Full banner configuration for users allowed to manage it (GET/PUT /banner/settings). */
 export interface BannerSettings {
   message: string;
   variant: BannerVariant;
@@ -302,7 +277,23 @@ export interface BannerSettings {
   updatedBy?: UserMinimal;
 }
 
-/** Server-resolved, configurable permissions of the current user (GET /users/me/permissions). */
+export interface UploadLimits {
+  maxFileSizeMb: number;
+  allowedContentTypes: string[];
+  minWidth: number;
+  minHeight: number;
+  maxWidth: number;
+  maxHeight: number;
+  animatedMinWidth: number;
+  animatedMinHeight: number;
+  animatedMaxWidth: number;
+  animatedMaxHeight: number;
+  maxPixels: number;
+  maxTags: number;
+  maxArtists: number;
+}
+
 export interface UserPermissions {
   canManageBanner: boolean;
+  upload?: UploadLimits;
 }

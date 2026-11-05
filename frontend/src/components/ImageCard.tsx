@@ -1,68 +1,95 @@
-import { ImageDto, Role, ReviewStatus } from "../types";
-import { Heart, Trash2, Edit2, FolderMinus, FolderPlus, Clock, GitPullRequest } from "lucide-react";
-import { Link } from "react-router-dom";
-import TagChip from "./TagChip";
-import { useAuth } from "../context/AuthContext";
-import { useMyPendingImageEdits } from "../hooks/useMyPendingImageEdits";
-import { useAuthGuard } from "../hooks/useRequireAuth";
-import { useState, useEffect } from "react";
-import api from "../services/api";
-import AlbumSelectionModal from "./modals/AlbumSelectionModal";
-import Skeleton from "./Skeleton";
-import { imgCard } from "../utils/cfImage";
+import { ImageDto, Role, ReviewStatus } from '../types';
+import { Heart, Trash2, Pencil, FolderMinus, FolderPlus, Clock, GitPullRequest, ImageOff } from 'lucide-react';
+import { Link } from 'react-router';
+import { useQueryClient } from '@tanstack/react-query';
+import TagChip from './TagChip';
+import { useAuth } from '../context/AuthContext';
+import { useMyPendingImageEdits } from '../hooks/useMyPendingImageEdits';
+import { useAuthGuard } from '../hooks/useRequireAuth';
+import { useHolo } from '../hooks/useHolo';
+import { ReactNode, useState, MouseEvent } from 'react';
+import api from '../services/api';
+import AlbumSelectionModal from './modals/AlbumSelectionModal';
+import { imgCard, imgCardSrcSet } from '../utils/cfImage';
+import { safeColor } from '../utils/color';
+import { patchCachedImage } from '../utils/imageCache';
+import { nowIso } from '../utils/time';
 
 interface ImageCardProps {
     image: ImageDto;
+    eager?: boolean;
+    priority?: boolean;
     onDelete?: (id: number) => void;
     onRemove?: (id: number) => void;
     onEdit?: (image: ImageDto) => void;
-    /** Lets a logged-in non-moderator propose an edit (shown instead of the moderator edit button). */
     onSuggest?: (image: ImageDto) => void;
     forceOverlay?: boolean;
     readOnly?: boolean;
-    /** When true, show a tag strip below the image: the image's accepted tags + the user's own pending tags. */
     showTags?: boolean;
 }
 
-const ImageCard = ({ image, onDelete, onRemove, onEdit, onSuggest, forceOverlay = false, readOnly = false, showTags = false }: ImageCardProps) => {
+export const CARD_SIZES = '(min-width: 1280px) 13rem, (min-width: 1024px) 16rem, (min-width: 640px) 30vw, 32vw';
+
+const OverlayButton = ({ label, onClick, children, danger = false }: { label: string; onClick: () => void; children: ReactNode; danger?: boolean }) => (
+    <button
+        type="button"
+        title={label}
+        aria-label={label}
+        onClick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); onClick(); }}
+        className={`pointer-events-auto grid size-8 place-items-center rounded-full shadow-card transition-colors ${danger ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90' : 'bg-card/92 text-foreground hover:bg-card'}`}
+    >
+        {children}
+    </button>
+);
+
+const CornerSticker = ({ children, tone }: { children: ReactNode; tone: 'nsfw' | 'gif' }) => (
+    <span className={`rounded-full px-1.5 py-px text-[0.625rem] font-black leading-4 shadow-card @[8.5rem]:px-2 @[8.5rem]:py-0.5 @[8.5rem]:text-[0.6875rem] @[8.5rem]:leading-5 ${tone === 'nsfw' ? 'bg-destructive text-destructive-foreground' : 'bg-card text-foreground'}`}>
+        {children}
+    </span>
+);
+
+const TAG_CAP = 6;
+
+const ImageCard = ({ image, eager = false, priority = false, onDelete, onRemove, onEdit, onSuggest, forceOverlay = false, readOnly = false, showTags = false }: ImageCardProps) => {
     const { user } = useAuth();
     const checkAuth = useAuthGuard();
+    const queryClient = useQueryClient();
+    const holo = useHolo<HTMLDivElement>();
     const [isLiked, setIsLiked] = useState(!!image.likedAt);
     const [likesCount, setLikesCount] = useState(image.favorites);
-    const [isLikeLoading, setIsLikeLoading] = useState(false);
-
-    // État pour gérer le chargement visuel de l'image
-    const [isImageLoaded, setIsImageLoaded] = useState(false);
-
     const [localAlbums, setLocalAlbums] = useState(image.albums || []);
+    const [syncedImage, setSyncedImage] = useState(image);
+    const [isLikeLoading, setIsLikeLoading] = useState(false);
+    const [isImageLoaded, setIsImageLoaded] = useState(false);
+    const [isImageBroken, setIsImageBroken] = useState(false);
     const [isAlbumModalOpen, setIsAlbumModalOpen] = useState(false);
 
-    const isAdmin = user && user.role === Role.Admin;
+    if (syncedImage !== image) {
+        setSyncedImage(image);
+        setIsLiked(!!image.likedAt);
+        setLikesCount(image.favorites);
+        setLocalAlbums(image.albums || []);
+    }
 
-    // The user's own not-yet-approved tag proposals for this image (add/remove), fetched once via the review API.
+    const isAdmin = user && user.role === Role.Admin;
+    const artistNames = (image.artists ?? []).map(a => a.name).join(', ');
+    const altText = artistNames ? `Image #${image.id} by ${artistNames}` : `Image #${image.id}`;
+    const placeholder = safeColor(image.dominantColor);
+
     const { data: pendingEdits } = useMyPendingImageEdits(showTags);
     const edit = pendingEdits?.get(image.id);
     const removedTagIds = new Set((edit?.removeTags ?? []).map(t => t.id));
     const addedTags = edit?.addTags ?? [];
 
-    // The strip shows the image's accepted tags (capped + linkable) plus the user's own pending tags linked to it.
-    // Their not-yet-reviewed edit proposal contributes additions (addedTags, not linked yet) and marks removals.
     const allTags = image.tags ?? [];
     const removedTags = allTags.filter(t => removedTagIds.has(t.id));
     const myPendingTags = allTags.filter(t => t.reviewStatus === ReviewStatus.Pending && !removedTagIds.has(t.id));
     const acceptedTags = allTags.filter(t => t.reviewStatus !== ReviewStatus.Pending && !removedTagIds.has(t.id));
-    const TAG_CAP = 6;
     const shownTags = acceptedTags.slice(0, TAG_CAP);
     const hiddenTagCount = acceptedTags.length - shownTags.length;
     const hasAnyTag = acceptedTags.length || myPendingTags.length || removedTags.length || addedTags.length;
 
-    useEffect(() => {
-        setIsLiked(!!image.likedAt);
-        setLikesCount(image.favorites);
-        setLocalAlbums(image.albums || []);
-    }, [image.likedAt, image.favorites, image.albums]);
-
-    const toggleLike = async (e: React.MouseEvent) => {
+    const toggleLike = async (e: MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
         if (!checkAuth('You must be logged in to like images.', `/images/${image.id}`)) return;
@@ -70,19 +97,26 @@ const ImageCard = ({ image, onDelete, onRemove, onEdit, onSuggest, forceOverlay 
 
         setIsLikeLoading(true);
         const prevLiked = isLiked;
+        const nextCount = prevLiked ? likesCount - 1 : likesCount + 1;
         setIsLiked(!prevLiked);
-        setLikesCount(prev => prevLiked ? prev - 1 : prev + 1);
+        setLikesCount(nextCount);
 
         try {
             if (prevLiked) {
                 await api.delete(`/users/me/albums/favorites/images/${image.id}`);
-                setLocalAlbums(prev => prev.filter(a => !a.isDefault));
             } else {
                 await api.post(`/users/me/albums/favorites/images/${image.id}`);
             }
-        } catch (error) {
+            const albums = prevLiked ? localAlbums.filter(a => !a.isDefault) : localAlbums;
+            setLocalAlbums(albums);
+            patchCachedImage(queryClient, image.id, {
+                likedAt: prevLiked ? undefined : nowIso(),
+                favorites: nextCount,
+                albums,
+            });
+        } catch {
             setIsLiked(prevLiked);
-            setLikesCount(prev => prevLiked ? prev : prev - 1);
+            setLikesCount(likesCount);
         } finally {
             setIsLikeLoading(false);
         }
@@ -92,135 +126,123 @@ const ImageCard = ({ image, onDelete, onRemove, onEdit, onSuggest, forceOverlay 
         setIsLiked(!!updatedImage.likedAt);
         setLikesCount(updatedImage.favorites);
         setLocalAlbums(updatedImage.albums || []);
-
-        image.albums = updatedImage.albums;
-        image.likedAt = updatedImage.likedAt;
-        image.favorites = updatedImage.favorites;
+        patchCachedImage(queryClient, image.id, {
+            albums: updatedImage.albums,
+            likedAt: updatedImage.likedAt,
+            favorites: updatedImage.favorites,
+        });
     };
 
+    const showActions = !readOnly && (!!user || !!onRemove) || !!onEdit || !!onSuggest || (!!onDelete && !!isAdmin);
+    const revealOnHover = forceOverlay ? 'flex' : 'hidden @[8.5rem]:flex xl:opacity-0 xl:group-hover:opacity-100 xl:group-focus-within:opacity-100';
+
     return (
-        <div className="relative group rounded-xl bg-card border border-border shadow-sm hover:shadow-md transition-shadow overflow-hidden flex flex-col">
-            <div className="relative">
-            <Link to={`/images/${image.id}`} className="block w-full">
-                {/* Conteneur intelligent :
-                   Utilise aspect-ratio pour réserver la place exacte de l'image
-                   avant qu'elle ne soit téléchargée.
-                */}
-                <div
-                    className="relative w-full bg-secondary/30 overflow-hidden"
-                    style={{ aspectRatio: `${image.width} / ${image.height}` }}
+        <article className="@container group relative flex min-w-0 flex-col [contain-intrinsic-size:auto_16rem] [content-visibility:auto]">
+            <div
+                onPointerMove={holo.onPointerMove}
+                onPointerLeave={holo.onPointerLeave}
+                className="holo-card relative rounded-[1.125rem] bg-card p-1.5 shadow-card ring-offset-2 ring-offset-background hover:shadow-lift has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring dark:ring-1 dark:ring-white/6"
+            >
+                <Link
+                    to={`/images/${image.id}`}
+                    className="relative block overflow-hidden rounded-[0.8rem] bg-sleeve outline-none"
+                    style={{ aspectRatio: '5 / 7', backgroundColor: placeholder ?? undefined }}
                 >
-                    {/* Le Skeleton reste visible tant que l'image n'est pas chargée */}
-                    {!isImageLoaded && (
-                        <Skeleton className="absolute inset-0 z-10 w-full h-full rounded-none" />
+                    {isImageBroken ? (
+                        <span className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-sleeve text-xs text-muted-foreground">
+                            <ImageOff size={22} aria-hidden="true" />
+                            <span>Image unavailable</span>
+                        </span>
+                    ) : (
+                        <img
+                            src={imgCard(image.url)}
+                            srcSet={imgCardSrcSet(image.url, image.width)}
+                            sizes={CARD_SIZES}
+                            alt={altText}
+                            width={image.width}
+                            height={image.height}
+                            loading={eager ? 'eager' : 'lazy'}
+                            fetchPriority={priority ? 'high' : 'auto'}
+                            decoding="async"
+                            onLoad={() => setIsImageLoaded(true)}
+                            onError={() => setIsImageBroken(true)}
+                            className={`size-full object-cover object-[50%_28%] transition-opacity duration-500 ${isImageLoaded ? 'opacity-100' : 'opacity-0'}`}
+                        />
                     )}
-
-                    <img
-                        src={imgCard(image.url)}
-                        alt={`Img ${image.id}`}
-                        loading="lazy"
-                        decoding="async"
-                        onLoad={() => setIsImageLoaded(true)}
-                        className={`w-full h-full object-cover transition-[opacity,transform] duration-700 xl:group-hover:scale-105 ${
-                            isImageLoaded ? 'opacity-100' : 'opacity-0'
-                        }`}
-                    />
-                </div>
-            </Link>
-
-            {/* Action buttons overlay. On xl+ revealed on hover. On smaller screens hidden unless forceOverlay is true. */}
-            <div className={`absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent flex-col justify-between p-3 pointer-events-none transition-opacity duration-300 xl:flex xl:opacity-0 xl:group-hover:opacity-100 ${forceOverlay ? 'flex' : 'hidden'}`}>
-                <div className="flex justify-end gap-2 pointer-events-auto">
-                    {!readOnly && user && (
-                        <>
-                            <button
-                                className="p-2 bg-primary/90 text-primary-foreground rounded-full shadow-sm hover:bg-primary transition-transform hover:scale-110"
-                                title="Add to Album"
-                                onClick={(e) => { e.preventDefault(); e.stopPropagation(); setIsAlbumModalOpen(true); }}
-                            >
-                                <FolderPlus size={14} />
-                            </button>
-                            <AlbumSelectionModal
-                                isOpen={isAlbumModalOpen}
-                                onClose={() => setIsAlbumModalOpen(false)}
-                                image={{...image, albums: localAlbums}}
-                                onUpdate={handleAlbumUpdate}
-                            />
-                        </>
+                    <span className="holo-foil" aria-hidden="true" />
+                    {(image.isNsfw || image.isAnimated) && (
+                        <span className="pointer-events-none absolute left-1.5 top-1.5 flex gap-1 @[8.5rem]:left-2 @[8.5rem]:top-2">
+                            {image.isNsfw && <CornerSticker tone="nsfw">NSFW</CornerSticker>}
+                            {image.isAnimated && <CornerSticker tone="gif">GIF</CornerSticker>}
+                        </span>
                     )}
+                </Link>
 
-                    {!readOnly && onRemove && (
-                        <button
-                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onRemove(image.id); }}
-                            className="p-2 bg-secondary/90 text-secondary-foreground rounded-full shadow-sm hover:bg-secondary transition-transform hover:scale-110"
-                            title="Remove from Album"
-                        >
-                            <FolderMinus size={14} />
-                        </button>
-                    )}
+                {showActions && (
+                    <div className={`pointer-events-none absolute right-3 top-3 flex-col gap-1.5 transition-opacity duration-200 ${revealOnHover}`}>
+                        {!readOnly && user && (
+                            <OverlayButton label="Add to Album" onClick={() => setIsAlbumModalOpen(true)}>
+                                <FolderPlus size={15} aria-hidden="true" />
+                            </OverlayButton>
+                        )}
+                        {!readOnly && onRemove && (
+                            <OverlayButton label="Remove from Album" onClick={() => onRemove(image.id)}>
+                                <FolderMinus size={15} aria-hidden="true" />
+                            </OverlayButton>
+                        )}
+                        {onEdit && (
+                            <OverlayButton label="Edit Image" onClick={() => onEdit(image)}>
+                                <Pencil size={14} aria-hidden="true" />
+                            </OverlayButton>
+                        )}
+                        {onSuggest && (
+                            <OverlayButton label="Suggest an edit" onClick={() => onSuggest(image)}>
+                                <GitPullRequest size={15} aria-hidden="true" />
+                            </OverlayButton>
+                        )}
+                        {onDelete && isAdmin && (
+                            <OverlayButton label="Delete" onClick={() => onDelete(image.id)} danger>
+                                <Trash2 size={15} aria-hidden="true" />
+                            </OverlayButton>
+                        )}
+                    </div>
+                )}
 
-                    {onEdit && (
-                        <button
-                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onEdit(image); }}
-                            className="p-2 bg-accent/90 text-accent-foreground rounded-full shadow-sm hover:bg-accent transition-transform hover:scale-110"
-                            title="Edit Image"
-                        >
-                            <Edit2 size={14} />
-                        </button>
-                    )}
-
-                    {onSuggest && (
-                        <button
-                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onSuggest(image); }}
-                            className="p-2 bg-accent/90 text-accent-foreground rounded-full shadow-sm hover:bg-accent transition-transform hover:scale-110"
-                            title="Suggest an edit"
-                        >
-                            <GitPullRequest size={14} />
-                        </button>
-                    )}
-
-                    {onDelete && isAdmin && (
-                        <button
-                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDelete(image.id); }}
-                            className="p-2 bg-red-600/90 text-white rounded-full shadow-sm hover:bg-red-700 transition-transform hover:scale-110"
-                            title="Delete"
-                        >
-                            <Trash2 size={14} />
-                        </button>
-                    )}
-                </div>
-                <div></div>
-            </div>
-
-            {/* Footer (ID + Likes) - always visible on mobile (smaller gradient), hover on desktop (full gradient) */}
-            <div className="absolute bottom-0 left-0 right-0 p-3 pointer-events-none
-                bg-gradient-to-t from-black/50 to-transparent
-                xl:from-black/80 xl:opacity-0 xl:group-hover:opacity-100 xl:transition-opacity xl:duration-300">
-                <div className="flex items-center justify-between text-white">
-                    <span className="text-xs font-mono opacity-75">#{image.id}</span>
+                <div className="flex items-center gap-2 px-1 pb-0.5 pt-1.5 @[8.5rem]:px-1.5 @[8.5rem]:pt-2">
+                    <span className="text-[0.8125rem] font-black leading-none tabular @[8.5rem]:text-sm">#{image.id}</span>
+                    <span className="hidden truncate text-[0.6875rem] leading-none text-muted-foreground tabular @[10rem]:inline">{image.width}×{image.height}</span>
                     {readOnly ? (
-                        <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-white/10 backdrop-blur-md">
-                            <Heart size={14} className="text-white" />
-                            <span className="text-xs font-bold">{likesCount}</span>
-                        </div>
+                        <span className="ml-auto flex items-center gap-1 text-xs font-bold text-muted-foreground" aria-label={`${likesCount} favorites`}>
+                            <Heart size={13} aria-hidden="true" />
+                            <span className="tabular" aria-hidden="true">{likesCount}</span>
+                        </span>
                     ) : (
                         <button
+                            type="button"
                             onClick={toggleLike}
-                            className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-md transition-colors pointer-events-auto"
+                            disabled={isLikeLoading}
+                            aria-pressed={isLiked}
+                            aria-label={`${isLiked ? 'Remove image #' + image.id + ' from favorites' : 'Add image #' + image.id + ' to favorites'} (${likesCount} favorites)`}
+                            className={`ml-auto -my-1 -mr-1 flex items-center gap-1 rounded-full px-2 py-1 text-xs font-bold transition-colors ${isLiked ? 'text-brand-ink hover:bg-brand-soft' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'}`}
                         >
-                            <Heart
-                                size={14}
-                                className={`transition-colors ${isLiked ? "fill-rose-500 text-rose-500" : "text-white"}`}
-                            />
-                            <span className="text-xs font-bold">{likesCount}</span>
+                            <Heart size={14} aria-hidden="true" className={isLiked ? 'fill-current' : ''} />
+                            <span className="tabular" aria-hidden="true">{likesCount}</span>
                         </button>
                     )}
                 </div>
             </div>
-            </div>
+
+            {!readOnly && user && (
+                <AlbumSelectionModal
+                    isOpen={isAlbumModalOpen}
+                    onClose={() => setIsAlbumModalOpen(false)}
+                    image={{ ...image, albums: localAlbums }}
+                    onUpdate={handleAlbumUpdate}
+                />
+            )}
 
             {showTags && (
-                <div className="px-2 py-2 flex flex-wrap gap-1 border-t border-border bg-card">
+                <div className="mt-2.5 flex flex-wrap gap-1 px-0.5">
                     {shownTags.map(t => (
                         <TagChip key={`t-${t.id}`} label={t.name} href={`/gallery?includedTags=${encodeURIComponent(t.slug)}`} />
                     ))}
@@ -241,12 +263,10 @@ const ImageCard = ({ image, onDelete, onRemove, onEdit, onSuggest, forceOverlay 
                     {myPendingTags.map(t => (
                         <TagChip key={`p-${t.id}`} tone="pending" label={t.name} title="Your tag (awaiting review)" />
                     ))}
-                    {!hasAnyTag && (
-                        <span className="text-[11px] text-muted-foreground italic">No tags</span>
-                    )}
+                    {!hasAnyTag && <span className="text-xs text-muted-foreground">No tags yet</span>}
                 </div>
             )}
-        </div>
+        </article>
     );
 };
 

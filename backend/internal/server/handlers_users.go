@@ -15,20 +15,33 @@ func (s *Server) RegisterUserRoutes() {
 	s.Handle("GET /users/me/permissions", s.RequireAuth(http.HandlerFunc(s.handleGetMyPermissions)))
 	s.Handle("GET /users/{id}", s.RequireRole("Moderator")(http.HandlerFunc(s.handleGetUserMinimal)))
 	s.Handle("GET /users", s.RequireRole("Admin")(http.HandlerFunc(s.handleListUsers)))
-	s.Handle("PUT /users/{id}/role", s.RequireRole("Admin")(http.HandlerFunc(s.handleSetUserRole)))
-	s.Handle("PUT /users/{id}/ban", s.RequireRole("Admin")(http.HandlerFunc(s.handleBanUser)))
+	s.Handle("PUT /users/{id}/role", s.RequireRole("Admin")(s.requireSession(adminSessionDetail, http.HandlerFunc(s.handleSetUserRole))))
+	s.Handle("PUT /users/{id}/ban", s.RequireRole("Admin")(s.requireSession(adminSessionDetail, http.HandlerFunc(s.handleBanUser))))
+}
+
+const userColumns = `u."Id", u."Name", u."DiscordId", u."AvatarUrl", u."Role", u."IsBlacklisted", u."BlacklistReason",
+	u."RequestCount", u."ApiKeyRequestCount", u."JwtRequestCount"`
+
+func scanUser(row pgx.Row, extra ...any) (*userDto, error) {
+	var u userDto
+	var role int
+	var name, discordID, avatar *string
+	dest := append([]any{&u.ID, &name, &discordID, &avatar, &role, &u.IsBlacklisted, &u.BlacklistReason,
+		&u.RequestCount, &u.APIKeyRequestCount, &u.JWTRequestCount}, extra...)
+	if err := row.Scan(dest...); err != nil {
+		return nil, err
+	}
+	u.Name = orEmpty(name)
+	u.DiscordID = orEmpty(discordID)
+	u.AvatarURL = orEmpty(avatar)
+	rRole, _ := auth.RoleFromInt(role)
+	u.Role = rRole.String()
+	return &u, nil
 }
 
 func (s *Server) handleGetMe(w http.ResponseWriter, r *http.Request) {
 	ident := IdentityFromContext(r.Context())
-	var u userDto
-	var role int
-	err := s.db.QueryRow(r.Context(), `
-		SELECT u."Id", u."Name", u."DiscordId", u."AvatarUrl", u."Role", u."IsBlacklisted", u."BlacklistReason",
-			u."RequestCount", u."ApiKeyRequestCount", u."JwtRequestCount"
-		FROM "Users" u WHERE u."Id" = $1`, ident.UserID).
-		Scan(&u.ID, &u.Name, &u.DiscordID, &u.AvatarURL, &role, &u.IsBlacklisted, &u.BlacklistReason,
-			&u.RequestCount, &u.APIKeyRequestCount, &u.JWTRequestCount)
+	u, err := scanUser(s.db.QueryRow(r.Context(), `SELECT `+userColumns+` FROM "Users" u WHERE u."Id" = $1`, ident.UserID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		NotFound(w, r, fmt.Sprintf("User with ID %d not found.", ident.UserID))
 		return
@@ -37,19 +50,64 @@ func (s *Server) handleGetMe(w http.ResponseWriter, r *http.Request) {
 		InternalError(w, r, s.log, err)
 		return
 	}
-	rRole, _ := auth.RoleFromInt(role)
-	u.Role = rRole.String()
-
 	u.UploadedImageCount = 0
 	u.AlbumImageCount = 0
 	writeJSON(w, http.StatusOK, u)
 }
 
+type uploadLimitsDto struct {
+	MaxFileSizeMB       int      `json:"maxFileSizeMb"`
+	AllowedContentTypes []string `json:"allowedContentTypes"`
+	MinWidth            int      `json:"minWidth"`
+	MinHeight           int      `json:"minHeight"`
+	MaxWidth            int      `json:"maxWidth"`
+	MaxHeight           int      `json:"maxHeight"`
+	AnimatedMinWidth    int      `json:"animatedMinWidth"`
+	AnimatedMinHeight   int      `json:"animatedMinHeight"`
+	AnimatedMaxWidth    int      `json:"animatedMaxWidth"`
+	AnimatedMaxHeight   int      `json:"animatedMaxHeight"`
+	MaxPixels           int64    `json:"maxPixels"`
+	MaxTags             int      `json:"maxTags"`
+	MaxArtists          int      `json:"maxArtists"`
+}
+
+type permissionsDto struct {
+	CanManageBanner bool            `json:"canManageBanner"`
+	Upload          uploadLimitsDto `json:"upload"`
+}
+
+func orDefault(v, def int) int {
+	if v > 0 {
+		return v
+	}
+	return def
+}
+
+func (s *Server) uploadLimits() uploadLimitsDto {
+	img := s.cfg.Image
+	return uploadLimitsDto{
+		MaxFileSizeMB:       s.cfg.MaxUploadMB,
+		AllowedContentTypes: []string{"image/jpeg", "image/png", "image/gif", "image/webp"},
+		MinWidth:            img.MinWidth,
+		MinHeight:           img.MinHeight,
+		MaxWidth:            img.MaxWidth,
+		MaxHeight:           img.MaxHeight,
+		AnimatedMinWidth:    orDefault(img.AnimatedMinWidth, img.MinWidth),
+		AnimatedMinHeight:   orDefault(img.AnimatedMinHeight, img.MinHeight),
+		AnimatedMaxWidth:    orDefault(img.AnimatedMaxWidth, img.MaxWidth),
+		AnimatedMaxHeight:   orDefault(img.AnimatedMaxHeight, img.MaxHeight),
+		MaxPixels:           s.cfg.Limits.MaxImagePixels,
+		MaxTags:             s.cfg.Limits.MaxTagsPerImage,
+		MaxArtists:          s.cfg.Limits.MaxArtistsPerImage,
+	}
+}
+
 func (s *Server) handleGetMyPermissions(w http.ResponseWriter, r *http.Request) {
 	ident := IdentityFromContext(r.Context())
-
-	canManageBanner := auth.MeetsPermission(ident.Role, s.cfg.Permissions.BannerManagementMinRole, auth.RoleModerator)
-	writeJSON(w, http.StatusOK, map[string]bool{"canManageBanner": canManageBanner})
+	writeJSON(w, http.StatusOK, permissionsDto{
+		CanManageBanner: auth.MeetsPermission(ident.Role, s.cfg.Permissions.BannerManagementMinRole, auth.RoleModerator),
+		Upload:          s.uploadLimits(),
+	})
 }
 
 func (s *Server) handleGetUserMinimal(w http.ResponseWriter, r *http.Request) {
@@ -58,10 +116,9 @@ func (s *Server) handleGetUserMinimal(w http.ResponseWriter, r *http.Request) {
 		RouteNotFound(w, r)
 		return
 	}
-
 	var u userMinimalDto
-	err = s.db.QueryRow(r.Context(), `SELECT "Id", "Name" FROM "Users" WHERE "Id" = $1`, id).
-		Scan(&u.ID, &u.Name)
+	var name *string
+	err = s.db.QueryRow(r.Context(), `SELECT "Id", "Name" FROM "Users" WHERE "Id" = $1`, id).Scan(&u.ID, &name)
 	if errors.Is(err, pgx.ErrNoRows) {
 		NotFound(w, r, fmt.Sprintf("User with ID %d not found.", id))
 		return
@@ -70,47 +127,50 @@ func (s *Server) handleGetUserMinimal(w http.ResponseWriter, r *http.Request) {
 		InternalError(w, r, s.log, err)
 		return
 	}
+	u.Name = orEmpty(name)
 	writeJSON(w, http.StatusOK, u)
 }
 
 func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
-	page, pageSize := paginationParams(r, s.cfg.PageSizes.UserDefault, s.cfg.PageSizes.UserMax)
-	name := r.URL.Query().Get("name")
-	includedIDs, _ := parseLongList(repeatedQuery(r, "includedIds"))
+	ctx := r.Context()
+	page, pageSize := s.paginationParams(r, s.cfg.PageSizes.UserDefault, s.cfg.PageSizes.UserMax)
+	name := strings.TrimSpace(queryGet(r, "name"))
+	includedIDs, err := s.idListParam(r, "includedIds")
+	if err != nil {
+		BadRequest(w, r, err.Error())
+		return
+	}
 
-	uploadedCount := `(SELECT COUNT(*) FROM "Images" i WHERE i."UploaderId" = u."Id" AND i."ReviewStatus" = 1)`
-	albumCount := `(SELECT COUNT(*) FROM "AlbumItems" ai JOIN "Albums" al ON al."Id" = ai."AlbumId" WHERE al."UserId" = u."Id")`
+	counts := ` CROSS JOIN LATERAL (
+			SELECT
+				(SELECT COUNT(*) FROM "Images" i WHERE i."UploaderId" = u."Id" AND i."ReviewStatus" = 1) AS uploaded,
+				(SELECT COUNT(*) FROM "AlbumItems" ai JOIN "Albums" al ON al."Id" = ai."AlbumId" WHERE al."UserId" = u."Id") AS album
+		) c`
 
 	bypassPagination := len(includedIDs) > 0
-
+	a := &sqlArgs{}
 	where := " WHERE TRUE"
-	args := []any{}
-	ph := func() string { return fmt.Sprintf("$%d", len(args)+1) }
-	if name != "" && !bypassPagination {
-
-		where += fmt.Sprintf(` AND (lower(u."Name") LIKE %s OR u."DiscordId" LIKE %s)`, ph(), ph())
-		args = append(args, "%"+strings.ToLower(name)+"%", "%"+name+"%")
-	}
 	if bypassPagination {
-		where += fmt.Sprintf(` AND u."Id" = ANY(%s)`, ph())
-		args = append(args, includedIDs)
+		where += ` AND u."Id" = ANY(` + a.add(includedIDs) + `)`
+	} else if name != "" {
+		where += fmt.Sprintf(` AND (lower(u."Name") LIKE %s OR u."DiscordId" LIKE %s)`,
+			a.add(likePattern(strings.ToLower(name))), a.add(likePattern(name)))
 	}
 
 	var total int64
-	if err := s.db.QueryRow(r.Context(), `SELECT COUNT(*) FROM "Users" u`+where, args...).Scan(&total); err != nil {
+	if err := s.db.QueryRow(ctx, `SELECT COUNT(*) FROM "Users" u`+where, a.args...).Scan(&total); err != nil {
 		InternalError(w, r, s.log, err)
 		return
 	}
 
-	query := fmt.Sprintf(`
-		SELECT u."Id", u."Name", u."DiscordId", u."AvatarUrl", u."Role", u."IsBlacklisted", u."BlacklistReason",
-			u."RequestCount", u."ApiKeyRequestCount", u."JwtRequestCount", %s, %s
-		FROM "Users" u%s`, uploadedCount, albumCount, where)
-	if !bypassPagination {
-		query += fmt.Sprintf(" ORDER BY %s DESC LIMIT %d OFFSET %d", uploadedCount, pageSize, (page-1)*pageSize)
+	query := `SELECT ` + userColumns + `, c.uploaded, c.album FROM "Users" u` + counts + where
+	if bypassPagination {
+		query += ` ORDER BY u."Id"`
+	} else {
+		query += fmt.Sprintf(` ORDER BY c.uploaded DESC, u."Id" ASC LIMIT %d OFFSET %d`, pageSize, offsetOf(page, pageSize))
 	}
 
-	rows, err := s.db.Query(r.Context(), query, args...)
+	rows, err := s.db.Query(ctx, query, a.args...)
 	if err != nil {
 		InternalError(w, r, s.log, err)
 		return
@@ -119,25 +179,26 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 
 	items := []userDto{}
 	for rows.Next() {
-		var u userDto
-		var role int
-		if err := rows.Scan(&u.ID, &u.Name, &u.DiscordID, &u.AvatarURL, &role, &u.IsBlacklisted, &u.BlacklistReason,
-			&u.RequestCount, &u.APIKeyRequestCount, &u.JWTRequestCount,
-			&u.UploadedImageCount, &u.AlbumImageCount); err != nil {
+		var uploaded, album int64
+		u, err := scanUser(rows, &uploaded, &album)
+		if err != nil {
 			InternalError(w, r, s.log, err)
 			return
 		}
-		rRole, _ := auth.RoleFromInt(role)
-		u.Role = rRole.String()
-		items = append(items, u)
+		u.UploadedImageCount = uploaded
+		u.AlbumImageCount = album
+		items = append(items, *u)
+	}
+	if err := rows.Err(); err != nil {
+		InternalError(w, r, s.log, err)
+		return
 	}
 
 	if bypassPagination {
-
-		writeJSON(w, http.StatusOK, newPaginated(items, 1, len(items), int64(len(items)), s.cfg.PageSizes.UserMax, s.cfg.PageSizes.UserDefault))
+		writeJSON(w, http.StatusOK, s.newPaginated(items, 1, len(items), int64(len(items)), s.cfg.PageSizes.UserMax, s.cfg.PageSizes.UserDefault))
 		return
 	}
-	writeJSON(w, http.StatusOK, newPaginated(items, page, pageSize, total, s.cfg.PageSizes.UserMax, s.cfg.PageSizes.UserDefault))
+	writeJSON(w, http.StatusOK, s.newPaginated(items, page, pageSize, total, s.cfg.PageSizes.UserMax, s.cfg.PageSizes.UserDefault))
 }
 
 type userEntity struct {
@@ -157,14 +218,7 @@ type userEntity struct {
 }
 
 func (s *Server) loadUserEntity(w http.ResponseWriter, r *http.Request, id int64) (*userEntity, bool) {
-	var u userEntity
-	var roleInt int
-	err := s.db.QueryRow(r.Context(), `
-		SELECT "Id","Name","DiscordId","AvatarUrl","Role","IsBlacklisted","BlacklistReason",
-			"RequestCount","ApiKeyRequestCount","JwtRequestCount"
-		FROM "Users" WHERE "Id" = $1`, id).
-		Scan(&u.ID, &u.Name, &u.DiscordID, &u.AvatarURL, &roleInt, &u.IsBlacklisted, &u.BlacklistReason,
-			&u.RequestCount, &u.APIKeyRequestCount, &u.JWTRequestCount)
+	u, err := scanUser(s.db.QueryRow(r.Context(), `SELECT `+userColumns+` FROM "Users" u WHERE u."Id" = $1`, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		NotFound(w, r, fmt.Sprintf("User with ID %d not found.", id))
 		return nil, false
@@ -173,9 +227,15 @@ func (s *Server) loadUserEntity(w http.ResponseWriter, r *http.Request, id int64
 		InternalError(w, r, s.log, err)
 		return nil, false
 	}
-	rRole, _ := auth.RoleFromInt(roleInt)
-	u.Role = rRole.String()
-	return &u, true
+	ent := &userEntity{
+		ID: u.ID, Name: u.Name, DiscordID: u.DiscordID, Role: u.Role,
+		IsBlacklisted: u.IsBlacklisted, BlacklistReason: u.BlacklistReason,
+		RequestCount: u.RequestCount, APIKeyRequestCount: u.APIKeyRequestCount, JWTRequestCount: u.JWTRequestCount,
+	}
+	if u.AvatarURL != "" {
+		ent.AvatarURL = &u.AvatarURL
+	}
+	return ent, true
 }
 
 func (s *Server) handleSetUserRole(w http.ResponseWriter, r *http.Request) {
@@ -212,6 +272,7 @@ func (s *Server) handleSetUserRole(w http.ResponseWriter, r *http.Request) {
 		NotFound(w, r, fmt.Sprintf("User with ID %d not found.", id))
 		return
 	}
+	s.log.Info("user role changed", "userId", id, "role", role.String(), "by", ident.UserID)
 
 	u, ok := s.loadUserEntity(w, r, id)
 	if !ok {
@@ -241,7 +302,8 @@ func (s *Server) handleBanUser(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if len(req.Reason) > 200 {
+	reasonText := strings.TrimSpace(req.Reason)
+	if runeLen(reasonText) > 200 {
 		WriteValidationProblem(w, r, map[string][]string{
 			"Reason": {"Blacklist reason must not exceed 200 characters."},
 		})
@@ -250,7 +312,7 @@ func (s *Server) handleBanUser(w http.ResponseWriter, r *http.Request) {
 
 	var reason *string
 	if req.IsBlacklisted {
-		reason = orEmptyString(req.Reason)
+		reason = orEmptyString(reasonText)
 	}
 	res, err := s.db.Exec(r.Context(), `
 		UPDATE "Users" SET "IsBlacklisted" = $1, "BlacklistReason" = $2 WHERE "Id" = $3`,
@@ -263,6 +325,7 @@ func (s *Server) handleBanUser(w http.ResponseWriter, r *http.Request) {
 		NotFound(w, r, fmt.Sprintf("User with ID %d not found.", id))
 		return
 	}
+	s.log.Info("user blacklist changed", "userId", id, "blacklisted", req.IsBlacklisted, "by", ident.UserID)
 
 	u, ok := s.loadUserEntity(w, r, id)
 	if !ok {

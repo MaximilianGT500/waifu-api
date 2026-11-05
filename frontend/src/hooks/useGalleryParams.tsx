@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router';
 import { ImageOrderBy, NsfwMode, AnimatedMode, Orientation, ReviewStatusFilter } from '../types';
+
+const DEFAULT_PAGE_SIZE = 36;
 
 export const useGalleryParams = (defaultSort = ImageOrderBy.Random) => {
     const [searchParams, setSearchParams] = useSearchParams();
@@ -25,8 +27,8 @@ export const useGalleryParams = (defaultSort = ImageOrderBy.Random) => {
     const page = pageStr ? parseInt(pageStr) : 1;
 
     const pageSizeStr = searchParams.get('pageSize');
-    let pageSize = pageSizeStr ? parseInt(pageSizeStr) : 30;
-    if (isNaN(pageSize) || pageSize < 1) pageSize = 30;
+    let pageSize = pageSizeStr ? parseInt(pageSizeStr) : DEFAULT_PAGE_SIZE;
+    if (isNaN(pageSize) || pageSize < 1) pageSize = DEFAULT_PAGE_SIZE;
     if (pageSize > 100) pageSize = 100;
 
     const prevFiltersRef = useRef(JSON.stringify({ isNsfw, orderBy, orientation, isAnimated, height, width, byteSize, includedTags, excludedTags, includedArtists, excludedArtists, includedIds, excludedIds, uploaderId, reviewStatus }));

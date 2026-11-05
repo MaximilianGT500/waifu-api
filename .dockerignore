@@ -1,0 +1,16 @@
+# Build context of the docs image (docker-compose builds it from the repository root).
+# Keeps secrets and host build output out of the context: a host node_modules copied over the image's
+# would also replace platform-specific binaries.
+.git
+.github
+.env
+.env.*
+!.env.example
+postgres_data
+**/node_modules
+**/dist
+**/build
+**/.docusaurus
+docs/docs/api
+backend
+frontend

@@ -1,68 +1,108 @@
-﻿import Modal from '../Modal';
-import { Trash2, AlertTriangle, LucideIcon } from 'lucide-react';
+import { ReactNode, useEffect, useRef, useState } from 'react';
+import Modal from '../Modal';
+import { Loader2, Trash2, TriangleAlert, LucideIcon } from 'lucide-react';
 
 interface ConfirmModalProps {
     isOpen: boolean;
     onClose: () => void;
-    onConfirm: () => void;
+    onConfirm: () => void | Promise<unknown>;
     title: string;
-    message: React.ReactNode;
+    message: ReactNode;
     confirmText?: string;
     cancelText?: string;
     variant?: 'destructive' | 'warning' | 'info';
-    icon?: LucideIcon; // Permet de passer une icône personnalisée (ex: FolderMinus)
+    icon?: LucideIcon;
     zIndex?: number;
 }
 
 const ConfirmModal = ({
-                          isOpen,
-                          onClose,
-                          onConfirm,
-                          title,
-                          message,
-                          confirmText = "Confirm",
-                          cancelText = "Cancel",
-                          variant = 'destructive',
-                          icon: Icon,
-                          zIndex
-                      }: ConfirmModalProps) => {
+    isOpen,
+    onClose,
+    onConfirm,
+    title,
+    message,
+    confirmText = 'Confirm',
+    cancelText = 'Cancel',
+    variant = 'destructive',
+    icon: Icon,
+    zIndex,
+}: ConfirmModalProps) => {
+    const [isPending, setIsPending] = useState(false);
+    const [wasOpen, setWasOpen] = useState(isOpen);
+    const pendingRef = useRef(false);
+    const mounted = useRef(true);
 
-    // Choix de l'icône : Icon perso > Variant
-    const DisplayIcon = Icon || (variant === 'destructive' ? Trash2 : AlertTriangle);
+    if (wasOpen !== isOpen) {
+        setWasOpen(isOpen);
+        if (!isOpen) setIsPending(false);
+    }
 
-    // Choix des couleurs
+    useEffect(() => {
+        mounted.current = true;
+        return () => { mounted.current = false; };
+    }, []);
+
+    useEffect(() => {
+        if (!isOpen) pendingRef.current = false;
+    }, [isOpen]);
+
+    const handleConfirm = async () => {
+        if (pendingRef.current) return;
+        pendingRef.current = true;
+        setIsPending(true);
+        try {
+            await onConfirm();
+        } finally {
+            pendingRef.current = false;
+            if (mounted.current) setIsPending(false);
+        }
+    };
+
+    const DisplayIcon = Icon || (variant === 'destructive' ? Trash2 : TriangleAlert);
+
     const colorClass = variant === 'destructive'
         ? 'bg-destructive/10 text-destructive'
         : variant === 'warning'
-            ? 'bg-orange-500/10 text-orange-500'
-            : 'bg-blue-500/10 text-blue-500';
+            ? 'bg-warning/12 text-warning'
+            : 'bg-info/10 text-info';
 
-    const buttonClass = variant === 'destructive'
-        ? 'bg-destructive hover:bg-destructive/90 text-destructive-foreground'
-        : variant === 'warning'
-            ? 'bg-orange-500 hover:bg-orange-600 text-white'
-            : 'bg-primary hover:bg-primary/90 text-primary-foreground';
+    const buttonClass = variant === 'destructive' ? 'btn-danger' : 'btn-primary';
 
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title={title} zIndex={zIndex}>
-            <div className="text-center space-y-4">
-                <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto ${colorClass}`}>
-                    <DisplayIcon size={32} />
-                </div>
-                <div className="text-muted-foreground">
-                    {message}
-                </div>
-                <div className="flex gap-3 mt-6">
-                    <button onClick={onClose} className="flex-1 py-3 bg-secondary rounded-lg font-bold hover:bg-secondary/80 transition-colors">
+        <Modal
+            isOpen={isOpen}
+            onClose={isPending ? () => {} : onClose}
+            title={title}
+            zIndex={zIndex}
+            footer={
+                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        disabled={isPending}
+                        data-autofocus
+                        className="btn btn-secondary"
+                    >
                         {cancelText}
                     </button>
                     <button
-                        onClick={onConfirm}
-                        className={`flex-1 py-3 rounded-lg font-bold transition-colors ${buttonClass}`}
+                        type="button"
+                        onClick={handleConfirm}
+                        disabled={isPending}
+                        aria-busy={isPending}
+                        className={`btn ${buttonClass} disabled:cursor-wait`}
                     >
+                        {isPending && <Loader2 size={16} className="animate-spin" aria-hidden="true" />}
                         {confirmText}
                     </button>
                 </div>
+            }
+        >
+            <div className="flex items-start gap-4">
+                <span className={`grid size-11 shrink-0 place-items-center rounded-2xl ${colorClass}`} aria-hidden="true">
+                    <DisplayIcon size={20} />
+                </span>
+                <div className="min-w-0 pt-1 text-muted-foreground">{message}</div>
             </div>
         </Modal>
     );

@@ -1,27 +1,29 @@
-import { Routes, Route } from 'react-router-dom'
+import { lazy } from 'react'
+import { Routes, Route } from 'react-router'
 import Home from './pages/Home'
-import Login from './pages/Login'
-import Upload from './pages/Upload'
-import Callback from './pages/Callback'
-import Gallery from './pages/Gallery'
-import Tags from './pages/Tags'
-import Artists from './pages/Artists'
-import Albums from './pages/Albums'
-import AlbumPage from './pages/AlbumPage'
-import ImagePage from './pages/ImagePage'
 import Layout from './components/layout/Layout'
-import Review from './pages/Review'
-import Users from './pages/Users'
-import ApiKeys from './pages/ApiKeys'
-import Reports from "@/pages/Reports.tsx";
-import MyReports from './pages/MyReports';
-import AdminStats from "@/pages/AdminStats.tsx";
-import StorageDiff from './pages/StorageDiff';
-import Contact from './pages/Contact';
-import Imprint from './pages/Imprint';
-import Privacy from './pages/Privacy';
-import SiteBannerSettings from './pages/SiteBannerSettings';
-import NotFound from './pages/NotFound';
+
+const Login = lazy(() => import('./pages/Login'))
+const Upload = lazy(() => import('./pages/Upload'))
+const Callback = lazy(() => import('./pages/Callback'))
+const Gallery = lazy(() => import('./pages/Gallery'))
+const Tags = lazy(() => import('./pages/Tags'))
+const Artists = lazy(() => import('./pages/Artists'))
+const Albums = lazy(() => import('./pages/Albums'))
+const AlbumPage = lazy(() => import('./pages/AlbumPage'))
+const ImagePage = lazy(() => import('./pages/ImagePage'))
+const Review = lazy(() => import('./pages/Review'))
+const Users = lazy(() => import('./pages/Users'))
+const ApiKeys = lazy(() => import('./pages/ApiKeys'))
+const Reports = lazy(() => import('./pages/Reports'))
+const MyReports = lazy(() => import('./pages/MyReports'))
+const AdminStats = lazy(() => import('./pages/AdminStats'))
+const StorageDiff = lazy(() => import('./pages/StorageDiff'))
+const Contact = lazy(() => import('./pages/Contact'))
+const Imprint = lazy(() => import('./pages/Imprint'))
+const Privacy = lazy(() => import('./pages/Privacy'))
+const SiteBannerSettings = lazy(() => import('./pages/SiteBannerSettings'))
+const NotFound = lazy(() => import('./pages/NotFound'))
 
 function App() {
     return (

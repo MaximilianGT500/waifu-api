@@ -5,41 +5,37 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
-    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "build": "tsc -p . && tsc -p tsconfig.node.json && vite build",
+    "typecheck": "tsc -p . && tsc -p tsconfig.node.json",
+    "lint": "oxlint --deny-warnings",
     "preview": "vite preview"
   },
   "dependencies": {
-    "@tanstack/react-query": "^5.0.0",
-    "axios": "^1.6.0",
-    "clsx": "^2.0.0",
-    "lucide-react": "^0.290.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-helmet-async": "^2.0.5",
-    "react-hook-form": "^7.48.0",
-    "react-router-dom": "^7.18.4",
-    "tailwind-merge": "^2.0.0"
+    "@fontsource-variable/m-plus-1": "^5.3.1",
+    "@fontsource-variable/m-plus-1-code": "^5.3.1",
+    "@fontsource/zen-maru-gothic": "^5.3.1",
+    "@tanstack/react-query": "^5.105.0",
+    "axios": "^1.21.0",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.64.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-hook-form": "^7.91.0",
+    "react-router": "^8.5.1",
+    "tailwind-merge": "^3.7.0"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "@types/react": "^18.2.0",
-    "@types/react-dom": "^18.2.0",
-    "@typescript-eslint/eslint-plugin": "^8.0.0",
-    "@typescript-eslint/parser": "^8.0.0",
-    "@vitejs/plugin-react": "^4.0.0",
-    "autoprefixer": "^10.4.0",
-    "eslint": "^8.45.0",
-    "eslint-plugin-react-hooks": "^4.6.0",
-    "eslint-plugin-react-refresh": "^0.4.0",
-    "postcss": "^8.4.0",
-    "tailwindcss": "^3.3.0",
-    "typescript": "^5.0.0",
-    "vite": "^7.3.5"
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "oxlint": "^1.90.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
   },
-  "overrides": {
-    "form-data": "^4.0.6",
-    "js-yaml": "^4.2.0",
-    "@babel/core": "^7.29.6"
+  "engines": {
+    "node": ">=22.22.0"
   }
 }

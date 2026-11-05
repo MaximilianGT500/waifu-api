@@ -41,16 +41,22 @@ func New(ctx context.Context, o Options) (*S3, error) {
 		return nil, fmt.Errorf("s3 configuration incomplete")
 	}
 
-	httpClient := &http.Client{
-		Timeout: 5 * time.Minute,
-		Transport: &http.Transport{
-			MaxIdleConns:        100,
-			MaxIdleConnsPerHost: 20,
-			IdleConnTimeout:     90 * time.Second,
-
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: !o.VerifySSL},
-		},
-	}
+	httpClient := awshttp.NewBuildableClient().
+		WithTimeout(5 * time.Minute).
+		WithTransportOptions(func(tr *http.Transport) {
+			tr.Proxy = http.ProxyFromEnvironment
+			tr.MaxIdleConns = 100
+			tr.MaxIdleConnsPerHost = 20
+			tr.IdleConnTimeout = 90 * time.Second
+			tr.TLSHandshakeTimeout = 15 * time.Second
+			tr.ResponseHeaderTimeout = 2 * time.Minute
+			tr.ForceAttemptHTTP2 = true
+			if tr.TLSClientConfig == nil {
+				tr.TLSClientConfig = &tls.Config{}
+			}
+			tr.TLSClientConfig.MinVersion = tls.VersionTLS12
+			tr.TLSClientConfig.InsecureSkipVerify = !o.VerifySSL //nolint:gosec
+		})
 
 	region := o.Region
 	if region == "" {
@@ -69,7 +75,6 @@ func New(ctx context.Context, o Options) (*S3, error) {
 	client := s3.NewFromConfig(cfg, func(opts *s3.Options) {
 		opts.BaseEndpoint = aws.String(strings.TrimRight(o.ServiceURL, "/"))
 		opts.UsePathStyle = o.ForcePathStyle
-
 	})
 
 	return &S3{
@@ -97,13 +102,24 @@ func (s *S3) Delete(ctx context.Context, key string) error {
 		Bucket: aws.String(s.Bucket),
 		Key:    aws.String(key),
 	})
-	if err != nil {
-		var apiErr *awshttp.ResponseError
-		if errors.As(err, &apiErr) && apiErr.HTTPStatusCode() == 404 {
-			return nil
-		}
+	if err != nil && isNotFound(err) {
+		return nil
 	}
 	return err
+}
+
+func (s *S3) Exists(ctx context.Context, key string) (bool, error) {
+	_, err := s.Client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(s.Bucket),
+		Key:    aws.String(key),
+	})
+	if err == nil {
+		return true, nil
+	}
+	if isNotFound(err) {
+		return false, nil
+	}
+	return false, err
 }
 
 func (s *S3) PublicURL(key string) string {
@@ -132,4 +148,17 @@ func (s *S3) List(ctx context.Context, fn func(key string) bool) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+func isNotFound(err error) bool {
+	var apiErr *awshttp.ResponseError
+	if errors.As(err, &apiErr) && apiErr.HTTPStatusCode() == http.StatusNotFound {
+		return true
+	}
+	var nf *types.NotFound
+	if errors.As(err, &nf) {
+		return true
+	}
+	var nsk *types.NoSuchKey
+	return errors.As(err, &nsk)
 }

@@ -1,4 +1,4 @@
-﻿import { useEffect } from 'react';
+import { useEffect } from 'react';
 import { useNotification } from '../context/NotificationContext';
 import { globalErrorBus } from '../services/eventBus';
 

@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useEffectEvent } from 'react';
 import Modal from '../Modal';
 import { ImageDto, ImageFormData, PaginatedList, User, ReviewStatus, ReviewStatusFilter, Role, ReviewableContentType, SubmitEditBody } from '../../types';
 import SearchableSelect, { Option } from '../SearchableSelect';
@@ -6,13 +6,14 @@ import api from '../../services/api';
 import TagModal from './TagModal';
 import ArtistModal from './ArtistModal';
 import { useMetadata } from '../../hooks/useMetadata';
-import { Dropdown, DropdownItem } from '../Dropdown';
-import { Check, Clock, ChevronDown, Trash2, Upload, Loader2, GitPullRequest } from 'lucide-react';
+import { Dropdown, DropdownTrigger, DropdownItem } from '../Dropdown';
+import { Check, Clock, ChevronDown, Trash2, Upload, Loader2, GitPullRequest, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useNotification } from '../../context/NotificationContext';
 import { buildImagePayload } from '../../utils/editRequests';
 import { imgCard } from '../../utils/cfImage';
 import AcceptSubmissionNote from '../AcceptSubmissionNote';
+import { safeExternalUrl } from '../../utils/safeUrl';
 
 interface ImageModalProps {
     isOpen: boolean;
@@ -20,14 +21,8 @@ interface ImageModalProps {
     initialData?: ImageDto;
     onSubmit: (data: ImageFormData) => Promise<void> | void;
     onDelete?: () => void;
-    /** When provided, the modal acts as a "suggest an edit" form and POSTs an edit request itself. */
     suggestContext?: { targetType: ReviewableContentType; targetId: number; current: ImageDto };
-    /**
-     * Content-only edit (e.g. moderating a pending submission): hides file replacement, review status and
-     * uploader, and submits the content via onSubmit. Review status is changed only through Approve/Reject.
-     */
     contentOnly?: boolean;
-    /** Overrides the modal title (e.g. "Edit submission · Image #12"). */
     title?: string;
 }
 
@@ -45,7 +40,6 @@ const ImageModal = ({ isOpen, onClose, initialData, onSubmit, onDelete, suggestC
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const isSuggestMode = !!suggestContext;
-    // Both suggest and content-only edits show a read-only image and hide the review/uploader controls.
     const readOnlyChrome = isSuggestMode || contentOnly;
 
     const {
@@ -57,20 +51,12 @@ const ImageModal = ({ isOpen, onClose, initialData, onSubmit, onDelete, suggestC
         newArtistName, setNewArtistName,
         loadTags, loadArtists,
         handleCreateTag, handleCreateArtist
-    // Suggest and content-only edits can only attach already-accepted tags/artists (querying pending ones
-    // needs moderator rights and 403s for a regular user editing their own submission).
     } = useMetadata({ reviewStatus: (isSuggestMode || contentOnly) ? ReviewStatusFilter.Accepted : ReviewStatusFilter.All });
 
     const isAdmin = user?.role === Role.Admin;
     const hasInitialized = useRef(false);
 
-    useEffect(() => {
-        if (!isOpen) {
-            hasInitialized.current = false;
-            return;
-        }
-        if (hasInitialized.current) return;
-        hasInitialized.current = true;
+    const initialize = useEffectEvent(() => {
 
         if (initialData) {
             setSource(initialData.source || '');
@@ -83,8 +69,6 @@ const ImageModal = ({ isOpen, onClose, initialData, onSubmit, onDelete, suggestC
             setReason('');
             setIsSubmitting(false);
 
-            // Only resolve the uploader when the uploader field is actually shown — a regular user editing
-            // their own submission can't GET /users/{id} (403), and the field is hidden here anyway.
             if (initialData.uploaderId && !readOnlyChrome) {
                 const uploaderId = initialData.uploaderId;
                 api.get<User>(`/users/${uploaderId}`, { skipGlobalErrorHandler: true })
@@ -109,9 +93,18 @@ const ImageModal = ({ isOpen, onClose, initialData, onSubmit, onDelete, suggestC
             setReason('');
             setIsSubmitting(false);
         }
-    }, [isOpen, initialData]);
+    });
 
-    // Handle file preview URL
+    useEffect(() => {
+        if (!isOpen) {
+            hasInitialized.current = false;
+            return;
+        }
+        if (hasInitialized.current) return;
+        hasInitialized.current = true;
+        initialize();
+    }, [isOpen]);
+
     useEffect(() => {
         if (selectedFile) {
             const url = URL.createObjectURL(selectedFile);
@@ -130,10 +123,15 @@ const ImageModal = ({ isOpen, onClose, initialData, onSubmit, onDelete, suggestC
     const handleSubmit = async (e?: React.FormEvent) => {
         if (e) e.preventDefault();
         if (isSubmitting) return;
+        const trimmedSource = source.trim();
+        if (trimmedSource && ([...trimmedSource].length > 500 || !safeExternalUrl(trimmedSource))) {
+            showNotification('warning', 'The source must be a valid http(s) URL with at most 500 characters.');
+            return;
+        }
 
         if (isSuggestMode && suggestContext) {
             const { payload, isEmpty } = buildImagePayload(suggestContext.current, {
-                source: source || undefined,
+                source: trimmedSource || undefined,
                 isNsfw,
                 tagSlugs: selectedTags.map(t => t.slug!),
                 artistIds: selectedArtists.map(a => Number(a.id)),
@@ -154,7 +152,6 @@ const ImageModal = ({ isOpen, onClose, initialData, onSubmit, onDelete, suggestC
                 showNotification('success', 'Suggestion submitted for review');
                 onClose();
             } catch {
-                // Error toast handled globally; keep modal open so the user can retry.
             } finally {
                 setIsSubmitting(false);
             }
@@ -165,7 +162,7 @@ const ImageModal = ({ isOpen, onClose, initialData, onSubmit, onDelete, suggestC
         try {
             await onSubmit({
                 file: selectedFile || undefined,
-                source: source || undefined,
+                source: trimmedSource || undefined,
                 isNsfw,
                 tags: selectedTags.map(t => t.slug!),
                 artists: selectedArtists.map(a => Number(a.id)),
@@ -173,8 +170,8 @@ const ImageModal = ({ isOpen, onClose, initialData, onSubmit, onDelete, suggestC
                 reviewStatus: reviewStatus
             });
             onClose();
-        } catch (err) {
-            // Error handled by parent
+        } catch {
+            return;
         } finally {
             setIsSubmitting(false);
         }
@@ -193,32 +190,33 @@ const ImageModal = ({ isOpen, onClose, initialData, onSubmit, onDelete, suggestC
 
     const getStatusBadge = (status?: ReviewStatus) => {
         switch (status) {
-            case ReviewStatus.Pending: return <span className="bg-yellow-500/10 text-yellow-600 px-2 py-1 rounded text-xs font-bold border border-yellow-500/20 flex items-center gap-1"><Clock size={12}/> Pending</span>;
-            case ReviewStatus.Accepted: return <span className="bg-green-500/10 text-green-600 px-2 py-1 rounded text-xs font-bold border border-green-500/20 flex items-center gap-1"><Check size={12}/> Accepted</span>;
+            case ReviewStatus.Pending: return <span className="inline-flex items-center gap-1 rounded-full bg-warning/12 px-2.5 py-0.5 text-xs font-semibold text-warning"><Clock size={12}/> Pending</span>;
+            case ReviewStatus.Accepted: return <span className="inline-flex items-center gap-1 rounded-full bg-success/12 px-2.5 py-0.5 text-xs font-semibold text-success"><Check size={12}/> Accepted</span>;
             default: return <span className="text-muted-foreground text-xs">Select Status</span>;
         }
     };
 
     const renderStatusDropdown = () => {
         return (
-            <Dropdown 
+            <Dropdown
                 trigger={
-                    <div className="w-full p-3 bg-secondary rounded-lg flex items-center justify-between cursor-pointer hover:bg-secondary/80 transition-colors border border-transparent focus-within:border-primary">
+                    <DropdownTrigger className="input flex cursor-pointer items-center justify-between text-left">
                         {getStatusBadge(reviewStatus)}
-                        <ChevronDown size={16} className="text-muted-foreground"/>
-                    </div>
+                        <ChevronDown size={16} aria-hidden="true" className="text-muted-foreground" />
+                    </DropdownTrigger>
                 }
+                label={`Review status: ${reviewStatus === ReviewStatus.Accepted ? 'Accepted' : reviewStatus === ReviewStatus.Pending ? 'Pending' : 'not set'}`}
                 align="left"
                 width="w-full"
             >
-                <DropdownItem 
+                <DropdownItem
                     onClick={() => setReviewStatus(ReviewStatus.Pending)}
                     active={reviewStatus === ReviewStatus.Pending}
                     icon={<Clock size={14}/>}
                 >
                     Pending
                 </DropdownItem>
-                <DropdownItem 
+                <DropdownItem
                     onClick={() => setReviewStatus(ReviewStatus.Accepted)}
                     active={reviewStatus === ReviewStatus.Accepted}
                     icon={<Check size={14}/>}
@@ -238,73 +236,74 @@ const ImageModal = ({ isOpen, onClose, initialData, onSubmit, onDelete, suggestC
             >
                 <div className="space-y-5">
                     {isSuggestMode && (
-                        <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-4 flex items-start gap-3">
-                            <GitPullRequest className="text-blue-500 shrink-0 mt-0.5" size={20} />
+                        <div className="flex items-start gap-3 rounded-2xl bg-info/10 p-4">
+                            <GitPullRequest className="mt-0.5 shrink-0 text-info" size={18} aria-hidden="true" />
                             <div>
-                                <h4 className="font-bold text-blue-600 dark:text-blue-400 text-sm">Suggesting an edit</h4>
-                                <p className="text-xs text-muted-foreground mt-1">
+                                <p className="text-sm font-bold">Suggesting an edit</p>
+                                <p className="mt-0.5 text-sm text-muted-foreground">
                                     Your changes will be submitted to the moderators for review.
                                 </p>
                             </div>
                         </div>
                     )}
 
-                    {/* Image Preview & File Upload */}
-                    {readOnlyChrome ? (
+                                        {readOnlyChrome ? (
                         <div>
-                            <label className="block text-sm font-bold mb-1.5 text-muted-foreground uppercase tracking-wider">Image</label>
-                            <div className="w-full h-48 border border-border rounded-xl overflow-hidden bg-muted">
+                            <p className="field-label">Current file</p>
+                            <div className="h-48 w-full overflow-hidden rounded-2xl bg-secondary">
                                 {initialData?.url && (
-                                    <img src={imgCard(initialData.url)} className="w-full h-full object-contain" alt="Current image" />
+                                    <img src={imgCard(initialData.url)} className="size-full object-contain" alt={`Upload #${initialData.id}`} />
                                 )}
                             </div>
                         </div>
                     ) : (
                         <div>
-                            <label className="block text-sm font-bold mb-1.5 text-muted-foreground uppercase tracking-wider">Image</label>
+                            <p className="field-label">File</p>
                             <div className="relative">
-                                <label className="block w-full h-48 border-2 border-dashed border-border rounded-xl cursor-pointer overflow-hidden hover:border-primary/50 transition-colors group">
+                                <label className="group block h-48 w-full cursor-pointer overflow-hidden rounded-2xl border-2 border-dashed border-input transition-colors hover:border-brand/60 focus-within:ring-4 focus-within:ring-brand/25">
+                                    <span className="sr-only">Replace the file</span>
                                     {previewUrl ? (
                                         <div className="relative w-full h-full">
-                                            <img src={previewUrl} className="w-full h-full object-contain" alt="New image preview" />
-                                            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white font-medium">
+                                            <img src={previewUrl} className="size-full object-contain" alt="Preview of the new file" />
+                                            <div className="absolute inset-0 flex items-center justify-center bg-zinc-950/60 font-medium text-white opacity-0 transition-opacity group-hover:opacity-100">
                                                 Click to change
                                             </div>
                                         </div>
                                     ) : initialData?.url ? (
                                         <div className="relative w-full h-full">
-                                            <img src={imgCard(initialData.url)} className="w-full h-full object-contain" alt="Current image" />
-                                            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white font-medium">
-                                                <Upload size={20} className="mr-2" /> Replace image
+                                            <img src={imgCard(initialData.url)} className="size-full object-contain" alt={`Upload #${initialData.id}`} />
+                                            <div className="absolute inset-0 flex items-center justify-center bg-zinc-950/60 font-medium text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                                                <Upload size={18} className="mr-2" aria-hidden="true" /> Replace file
                                             </div>
                                         </div>
                                     ) : (
-                                        <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-                                            <Upload size={24} className="mb-2" />
-                                            <span className="text-sm">Click to upload</span>
+                                        <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
+                                            <Upload size={22} className="mb-2" aria-hidden="true" />
+                                            <span className="text-sm">Choose a file</span>
                                         </div>
                                     )}
                                     <input
                                         type="file"
                                         accept="image/jpeg,image/png,image/gif,image/webp"
                                         onChange={handleFileChange}
-                                        className="hidden"
+                                        className="sr-only"
                                     />
                                 </label>
                                 {selectedFile && (
                                     <button
                                         type="button"
                                         onClick={clearSelectedFile}
-                                        className="absolute top-2 right-2 bg-destructive text-white p-1.5 rounded-full hover:bg-destructive/90 transition-colors"
-                                        title="Remove new image"
+                                        className="absolute right-2 top-2 grid size-8 place-items-center rounded-full bg-zinc-950/65 text-white backdrop-blur-md transition-colors hover:bg-zinc-950/85"
+                                        title="Discard the new file"
+                                        aria-label="Discard the new file"
                                     >
-                                        <Trash2 size={14} />
+                                        <X size={15} aria-hidden="true" />
                                     </button>
                                 )}
                             </div>
                             {selectedFile && (
-                                <p className="text-xs text-muted-foreground mt-2">
-                                    New file: {selectedFile.name} ({(selectedFile.size / (1024 * 1024)).toFixed(2)} MB)
+                                <p className="field-hint">
+                                    New file: <span className="font-semibold text-foreground">{selectedFile.name}</span>, {(selectedFile.size / (1024 * 1024)).toFixed(2)} MB
                                 </p>
                             )}
                         </div>
@@ -312,7 +311,7 @@ const ImageModal = ({ isOpen, onClose, initialData, onSubmit, onDelete, suggestC
 
                     {!readOnlyChrome && (
                         <div>
-                            <label className="block text-sm font-bold mb-1">Review Status</label>
+                            <p className="field-label">Review status</p>
                             {renderStatusDropdown()}
                             <AcceptSubmissionNote current={initialData?.reviewStatus} selected={reviewStatus} />
                         </div>
@@ -320,7 +319,7 @@ const ImageModal = ({ isOpen, onClose, initialData, onSubmit, onDelete, suggestC
 
                     <SearchableSelect
                         label="Artists"
-                        placeholder="Search artists..."
+                        placeholder="Search artists…"
                         loadOptions={loadArtists}
                         selectedOptions={selectedArtists}
                         onSelect={(o) => setSelectedArtists(p => p.some(a => a.id === o.id) ? p : [...p, o])}
@@ -330,7 +329,7 @@ const ImageModal = ({ isOpen, onClose, initialData, onSubmit, onDelete, suggestC
                     />
                     <SearchableSelect
                         label="Tags"
-                        placeholder="Add tags..."
+                        placeholder="Add tags…"
                         loadOptions={loadTags}
                         selectedOptions={selectedTags}
                         onSelect={(o) => setSelectedTags(p => p.some(t => t.id === o.id) ? p : [...p, o])}
@@ -339,34 +338,36 @@ const ImageModal = ({ isOpen, onClose, initialData, onSubmit, onDelete, suggestC
                         isMulti={true}
                     />
                     <div>
-                        <label className="block text-sm font-bold mb-1.5 text-muted-foreground uppercase tracking-wider">Source URL</label>
+                        <label htmlFor="image-source" className="field-label">Source URL</label>
                         <input
-                            type="text"
+                            id="image-source"
+                            type="url"
+                            inputMode="url"
+                            autoComplete="off"
+                            spellCheck={false}
                             value={source}
                             onChange={e => setSource(e.target.value)}
-                            className="w-full p-3 bg-secondary rounded-lg outline-none focus:ring-1 focus:ring-primary text-foreground transition-all placeholder:text-muted-foreground/50"
-                            placeholder="https://..."
+                            className="input"
+                            placeholder="https://…"
                         />
                     </div>
 
-                    <label className="flex items-center gap-3 p-4 border border-border rounded-xl cursor-pointer hover:bg-secondary/50 transition-colors">
+                    <label className="grid cursor-pointer grid-cols-[auto_1fr] items-start gap-x-3 rounded-2xl border border-border p-4 transition-colors hover:bg-secondary/60 has-[:checked]:border-destructive/40 has-[:checked]:bg-destructive/5">
                         <input
                             type="checkbox"
                             id="isNsfw"
                             checked={isNsfw}
                             onChange={e => setIsNsfw(e.target.checked)}
-                            className="w-5 h-5 rounded text-destructive focus:ring-destructive"
+                            className="row-span-2 mt-0.5 size-[1.125rem] shrink-0 accent-rose-600"
                         />
-                        <div>
-                            <span className="block font-bold">NSFW Content</span>
-                            <span className="text-xs text-muted-foreground">Contains adult material</span>
-                        </div>
+                        <span className="text-sm font-semibold">NSFW Content</span>
+                        <span className="col-start-2 text-sm text-muted-foreground">Contains adult material</span>
                     </label>
 
                     {!readOnlyChrome && (
                         <SearchableSelect
                             label="Uploader"
-                            placeholder="Search and select a user..."
+                            placeholder="Search users…"
                             loadOptions={loadUsers}
                             selectedOptions={selectedUser ? [selectedUser] : []}
                             onSelect={(o) => setSelectedUser(o)}
@@ -377,27 +378,30 @@ const ImageModal = ({ isOpen, onClose, initialData, onSubmit, onDelete, suggestC
 
                     {isSuggestMode && (
                         <div>
-                            <label className="block text-sm font-bold mb-1.5 text-muted-foreground uppercase tracking-wider">Reason <span className="text-xs font-normal normal-case tracking-normal">(optional)</span></label>
-                            <textarea
-                                value={reason}
+                            <label htmlFor="suggest-reason" className="field-label">Reason <span className="font-normal text-muted-foreground">(optional)</span></label>
+                        <textarea
+                            id="suggest-reason"
+                            value={reason}
                                 onChange={e => setReason(e.target.value)}
-                                className="w-full p-3 bg-secondary rounded-lg outline-none h-20 resize-none text-foreground"
+                                className="input h-20 resize-none"
                                 placeholder="Why are you suggesting this change?"
                                 disabled={isSubmitting}
                             />
                         </div>
                     )}
 
-                    <div className="flex gap-3 pt-2">
+                    <div className="flex gap-2 pt-1">
                         <button
+                            type="button"
                             onClick={() => handleSubmit()}
                             disabled={isSubmitting}
-                            className="flex-1 bg-primary text-primary-foreground py-3.5 rounded-xl font-bold hover:bg-primary/90 transition-all shadow-lg shadow-primary/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                            aria-busy={isSubmitting}
+                            className="btn btn-primary flex-1"
                         >
                             {isSubmitting ? (
                                 <>
-                                    <Loader2 size={18} className="animate-spin" />
-                                    {isSuggestMode ? 'Submitting...' : 'Saving...'}
+                                    <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+                                    {isSuggestMode ? 'Submitting…' : 'Saving…'}
                                 </>
                             ) : (
                                 isSuggestMode ? 'Submit suggestion' : 'Save Changes'
@@ -405,11 +409,14 @@ const ImageModal = ({ isOpen, onClose, initialData, onSubmit, onDelete, suggestC
                         </button>
                         {!isSuggestMode && onDelete && isAdmin && (
                             <button
+                                type="button"
                                 onClick={onDelete}
                                 disabled={isSubmitting}
-                                className="px-4 py-3.5 bg-secondary text-red-600 hover:bg-red-500/10 font-bold rounded-xl flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                aria-label="Delete image"
+                                title="Delete image"
+                                className="btn btn-danger-soft btn-icon px-3.5"
                             >
-                                <Trash2 size={20} />
+                                <Trash2 size={17} aria-hidden="true" />
                             </button>
                         )}
                     </div>

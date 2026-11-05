@@ -36,7 +36,9 @@ export const ApiKeyExample = () => {
 
 <ApiKeyExample />
 
-API keys are the recommended method for programmatic access. You can create and manage your keys via the `/auth/api-keys` endpoint once authenticated.
+API keys are the recommended method for programmatic access. You can list and revoke your keys via the `/auth/api-keys` endpoints with either method. Creating a key or changing its description/expiration requires a website session (JWT) – an API key cannot mint new keys. Likewise, changing user roles or bans and deleting files through the storage diff require a website session, even for administrators (`403` with an API key). A leaked key therefore cannot be used to persist access: revoking it ends it.
+
+Requests with an invalid, expired or revoked key are treated as anonymous (endpoints that require authentication answer `401`).
 
 ### JWT Token (Discord OAuth2)
 
@@ -46,6 +48,10 @@ For browser-based flows, authenticate via Discord OAuth2:
 2. The user authorizes the application.
 3. Discord redirects back with a `code` parameter.
 4. Exchange the code for a JWT token via `POST /auth/discord`.
+
+Always send a random, single-use `state` parameter with the authorization request and verify it in the callback
+before exchanging the code (login-CSRF protection). Tokens are valid for 7 days by default; role changes and bans
+take effect immediately, also for tokens issued earlier.
 
 Include the JWT in the `Authorization` header:
 

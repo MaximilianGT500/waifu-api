@@ -1,10 +1,11 @@
-﻿import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useState } from 'react';
+import { Link } from 'react-router';
 import { Tag, Role, ReviewableContentType, ReviewStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
 import Modal from '../components/Modal';
 import TagModal, { TagFormData } from '../components/modals/TagModal';
-import { Plus, Edit2, Trash2, Tag as TagIcon, ExternalLink, Info, Image, GitPullRequest, Clock } from 'lucide-react';
+import { Plus, Edit2, Trash2, Info, Image, GitPullRequest, Clock } from 'lucide-react';
+import ConfirmModal from '../components/modals/ConfirmModal';
 import SearchInput from '../components/SearchInput';
 import Pagination from '../components/Pagination';
 import { useResource } from '../hooks/useResource';
@@ -85,112 +86,101 @@ const Tags = () => {
     const canEdit = isAdmin || isModerator;
     const isReviewMode = !(canEdit);
 
+    const iconButton = 'relative z-10 grid size-8 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground';
+
     return (
-        <div className="container mx-auto p-6 md:p-10">
+        <div className="page">
             <MetaTags
               title="Tags"
               description="Browse and manage image tags."
             />
-            <div className="flex flex-col md:flex-row justify-between items-center mb-10 gap-4">
+            <div className="page-header">
                 <div>
-                    <h1 className="text-3xl font-black flex items-center gap-3 text-foreground">
-                        <TagIcon className="text-primary" size={32}/> Tags
-                    </h1>
-                    <p className="text-muted-foreground mt-1">Browse and manage image tags.</p>
+                    <h1 className="page-title">Tags</h1>
+                    <p className="page-lede">Every tag you can filter the gallery and the API by.</p>
                 </div>
 
-                <div className="flex gap-3 w-full md:w-auto">
+                <div className="flex w-full gap-2 md:w-auto">
                     <SearchInput
                         value={search}
                         onChange={setSearch}
                         searchType={searchType}
                         onSearchTypeChange={setSearchType}
                     />
-
-                    <button
-                        onClick={handleOpenCreate}
-                        className="flex items-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-xl font-bold hover:opacity-90 shadow-lg transition-all whitespace-nowrap"
-                    >
-                        <Plus size={20} /> <span className="hidden sm:inline">New</span>
+                    <button type="button" onClick={handleOpenCreate} aria-label="Create tag" className="btn btn-primary shrink-0">
+                        <Plus size={18} aria-hidden="true" /> <span className="hidden sm:inline">New tag</span>
                     </button>
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
                 {loading ? (
-                    [...Array(8)].map((_,i) => <div key={i} className="h-32 bg-muted rounded-xl animate-pulse"/>)
+                    [...Array(8)].map((_, i) => <div key={i} className="h-40 animate-pulse rounded-[var(--radius-panel)] bg-sleeve" />)
+                ) : tags.length === 0 ? (
+                    <p className="sleeve col-span-full px-6 py-14 text-center font-bold text-muted-foreground">
+                        No tags match your search.
+                    </p>
                 ) : (
                     tags.map(tag => (
-                        <div key={tag.id} className="group bg-card border border-border rounded-xl hover:shadow-md hover:border-primary/50 transition-all overflow-hidden flex flex-col p-6">
-                            <div className="flex justify-between items-start mb-2">
-                                <div className="flex flex-col gap-1 min-w-0">
-                                    <h3 className="font-bold text-lg text-foreground group-hover:text-primary transition-colors truncate">{tag.name}</h3>
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-xs font-mono bg-secondary px-2 py-1 rounded text-muted-foreground select-text">#{tag.id}</span>
-                                        <code className="text-xs text-primary/80 bg-primary/5 px-1.5 py-0.5 rounded select-text truncate" title="API Slug">{tag.slug}</code>
-                                        {tag.reviewStatus === ReviewStatus.Pending && (
-                                            <span className="text-xs font-medium bg-amber-500/10 text-amber-600 border border-dashed border-amber-500/40 px-1.5 py-0.5 rounded inline-flex items-center gap-1 shrink-0" title="Awaiting review">
-                                                <Clock size={11} /> Pending
-                                            </span>
-                                        )}
-                                    </div>
-                                </div>
-
-                                <div className="flex gap-2 flex-shrink-0 ml-2">
-                                    <button
-                                        onClick={() => setInfoTag(tag)}
-                                        className="p-1.5 bg-secondary hover:bg-primary hover:text-primary-foreground rounded text-muted-foreground transition-colors shadow-sm"
-                                        title="Info"
-                                    >
-                                        <Info size={16} />
-                                    </button>
+                        <article key={tag.id} className="panel group relative flex flex-col p-5 transition-shadow duration-200 hover:shadow-lift has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring">
+                            <div className="flex min-w-0 items-start justify-between gap-2">
+                                <h2 className="sticker min-w-0 px-4 py-1.5 text-base font-black leading-snug">
                                     <Link
                                         to={`/gallery?includedTags=${encodeURIComponent(tag.slug)}`}
-                                        className="p-1.5 bg-secondary hover:bg-primary hover:text-primary-foreground rounded text-muted-foreground transition-colors shadow-sm"
-                                        title="View in Gallery"
+                                        className="block min-w-0 truncate outline-none after:absolute after:inset-0"
+                                        title={`View images tagged ${tag.name}`}
                                     >
-                                        <ExternalLink size={16} />
+                                        {tag.name}
                                     </Link>
+                                </h2>
+                                {tag.reviewStatus === ReviewStatus.Pending && (
+                                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-warning/12 px-2 py-0.5 text-xs font-bold text-warning" title="Awaiting review">
+                                        <Clock size={11} aria-hidden="true" /> Pending
+                                    </span>
+                                )}
+                            </div>
+                            <div className="mt-3 flex min-w-0 items-center gap-2 px-1 text-xs text-muted-foreground">
+                                <code className="truncate font-mono text-brand-ink" title="API slug">{tag.slug}</code>
+                                <span className="tabular">#{tag.id}</span>
+                            </div>
 
+                            <p className="mt-2 line-clamp-2 flex-1 px-1 text-sm text-muted-foreground">{tag.description || 'No description'}</p>
+
+                            <div className="mt-4 flex items-center justify-between gap-2">
+                                <span className="inline-flex items-center gap-1.5 px-1 text-sm font-bold">
+                                    <Image size={15} className="text-muted-foreground" aria-hidden="true" />
+                                    <span className="tabular">{tag.imageCount?.toLocaleString() ?? 0}</span>
+                                    <span className="font-normal text-muted-foreground">images</span>
+                                </span>
+                                <div className="flex shrink-0 gap-0.5">
+                                    <button type="button" onClick={() => setInfoTag(tag)} className={iconButton} title="Details" aria-label={`Details for ${tag.name}`}>
+                                        <Info size={16} aria-hidden="true" />
+                                    </button>
                                     {canEdit ? (
                                         <>
-                                            <button
-                                                onClick={(e) => openEdit(e, tag)}
-                                                className="p-1.5 bg-secondary hover:bg-primary hover:text-primary-foreground rounded text-muted-foreground transition-colors shadow-sm"
-                                                title="Edit"
-                                            >
-                                                <Edit2 size={16}/>
+                                            <button type="button" onClick={(e) => openEdit(e, tag)} className={iconButton} title="Edit" aria-label={`Edit ${tag.name}`}>
+                                                <Edit2 size={15} aria-hidden="true" />
                                             </button>
                                             {isAdmin && (
-                                                <button
-                                                    onClick={(e) => openDelete(e, tag)}
-                                                    className="p-1.5 bg-secondary hover:bg-destructive hover:text-destructive-foreground rounded text-muted-foreground transition-colors shadow-sm"
-                                                    title="Delete"
-                                                >
-                                                    <Trash2 size={16}/>
+                                                <button type="button" onClick={(e) => openDelete(e, tag)} className={`${iconButton} hover:bg-destructive/10 hover:text-destructive`} title="Delete" aria-label={`Delete ${tag.name}`}>
+                                                    <Trash2 size={15} aria-hidden="true" />
                                                 </button>
                                             )}
                                         </>
                                     ) : user && (
                                         <button
+                                            type="button"
                                             onClick={(e) => { e.preventDefault(); e.stopPropagation(); setSuggestTag(tag); }}
-                                            className="p-1.5 bg-secondary hover:bg-primary hover:text-primary-foreground rounded text-muted-foreground transition-colors shadow-sm"
+                                            className={iconButton}
                                             title="Suggest edit"
+                                            aria-label={`Suggest an edit for ${tag.name}`}
                                         >
-                                            <GitPullRequest size={16}/>
+                                            <GitPullRequest size={15} aria-hidden="true" />
                                         </button>
                                     )}
                                 </div>
                             </div>
-
-                            <div className="flex items-center gap-1.5 mt-3 text-xs text-muted-foreground">
-                                <Image size={14} className="text-primary" />
-                                <span className="font-medium">{tag.imageCount?.toLocaleString() ?? 0}</span>
-                                <span>images</span>
-                            </div>
-
-                            <p className="text-sm text-muted-foreground line-clamp-2 mt-3">{tag.description || "No description"}</p>
-                        </div>
+                        </article>
                     ))
                 )}
             </div>
@@ -230,42 +220,44 @@ const Tags = () => {
                 />
             )}
 
-            <Modal isOpen={isDeleteOpen} onClose={() => setIsDeleteOpen(false)} title="Delete Tag" zIndex={70}>
-                <div className="text-center space-y-4">
-                    <div className="w-16 h-16 bg-destructive/10 text-destructive rounded-full flex items-center justify-center mx-auto"><Trash2 size={32}/></div>
-                    <p className="text-muted-foreground">Delete tag <strong>{selectedTag?.name}</strong>?</p>
-                    <div className="flex gap-3 mt-6">
-                        <button onClick={() => setIsDeleteOpen(false)} className="flex-1 py-3 bg-secondary rounded-lg font-bold">Cancel</button>
-                        <button onClick={handleDelete} className="flex-1 py-3 bg-destructive text-destructive-foreground rounded-lg font-bold">Delete</button>
-                    </div>
-                </div>
-            </Modal>
+            <ConfirmModal
+                isOpen={isDeleteOpen}
+                onClose={() => setIsDeleteOpen(false)}
+                onConfirm={handleDelete}
+                title="Delete Tag"
+                message={<p>Delete the tag <strong className="text-foreground">{selectedTag?.name}</strong>? Images keep existing but lose this tag.</p>}
+                confirmText="Delete"
+                variant="destructive"
+                zIndex={70}
+            />
 
             <Modal
                 isOpen={!!infoTag}
                 onClose={() => setInfoTag(null)}
                 title="Tag Details"
+                footer={infoTag && (
+                    <div className="flex justify-end">
+                        <Link to={`/gallery?includedTags=${encodeURIComponent(infoTag.slug)}`} className="btn btn-primary">
+                            View images
+                        </Link>
+                    </div>
+                )}
             >
                 {infoTag && (
-                    <div className="space-y-4">
+                    <dl className="space-y-4">
                         <div>
-                            <h3 className="text-sm font-bold text-muted-foreground uppercase tracking-wider">Name</h3>
-                            <p className="text-lg font-medium break-words">{infoTag.name}</p>
-                        </div>
-                        <div>
-                            <h3 className="text-sm font-bold text-muted-foreground uppercase tracking-wider">Slug</h3>
-                            <code className="text-sm bg-secondary px-2 py-1 rounded break-all">{infoTag.slug}</code>
+                            <dt className="text-sm text-muted-foreground">Name</dt>
+                            <dd className="mt-0.5 text-lg font-semibold wrap-break-word">{infoTag.name}</dd>
                         </div>
                         <div>
-                            <h3 className="text-sm font-bold text-muted-foreground uppercase tracking-wider">Description</h3>
-                            <p className="text-base whitespace-pre-wrap break-words">{infoTag.description || "No description available."}</p>
+                            <dt className="text-sm text-muted-foreground">Slug</dt>
+                            <dd className="mt-1"><code className="rounded-full bg-secondary px-2.5 py-1 font-mono text-sm break-all">{infoTag.slug}</code></dd>
                         </div>
-                        <div className="pt-4 border-t border-border flex justify-end">
-                            <Link to={`/gallery?includedTags=${encodeURIComponent(infoTag.slug)}`} className="px-4 py-2 bg-primary text-primary-foreground rounded-lg font-bold hover:opacity-90">
-                                View Gallery
-                            </Link>
+                        <div>
+                            <dt className="text-sm text-muted-foreground">Description</dt>
+                            <dd className="mt-0.5 whitespace-pre-wrap wrap-break-word">{infoTag.description || 'No description available.'}</dd>
                         </div>
-                    </div>
+                    </dl>
                 )}
             </Modal>
         </div>

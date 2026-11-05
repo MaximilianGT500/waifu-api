@@ -37,7 +37,6 @@ func (s *Server) resolveAlbumUser(w http.ResponseWriter, r *http.Request, ident 
 		EmptyNotFound(w)
 		return 0, false
 	}
-
 	return id, true
 }
 
@@ -59,24 +58,37 @@ func (s *Server) resolveAlbumID(w http.ResponseWriter, r *http.Request, userID i
 	return id, true
 }
 
+func (s *Server) albumOwned(ctx context.Context, albumID, userID int64) (bool, error) {
+	var owned bool
+	err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM "Albums" WHERE "Id" = $1 AND "UserId" = $2)`, albumID, userID).Scan(&owned)
+	return owned, err
+}
+
 func (s *Server) ensureDefaultAlbum(ctx context.Context, userID int64) (int64, error) {
 	var id int64
-	err := s.db.QueryRow(ctx, `SELECT "Id" FROM "Albums" WHERE "UserId" = $1 AND "IsDefault"`, userID).Scan(&id)
+	err := s.db.QueryRow(ctx, `SELECT "Id" FROM "Albums" WHERE "UserId" = $1 AND "IsDefault" ORDER BY "Id" LIMIT 1`, userID).Scan(&id)
 	if err == nil {
 		return id, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return 0, err
 	}
-	err = s.db.QueryRow(ctx, `
-		INSERT INTO "Albums" ("Name","Description","IsDefault","UserId")
-		VALUES ('Favorites','',true,$1)
-		ON CONFLICT DO NOTHING
-		RETURNING "Id"`, userID).Scan(&id)
-	if errors.Is(err, pgx.ErrNoRows) {
-
-		err = s.db.QueryRow(ctx, `SELECT "Id" FROM "Albums" WHERE "UserId" = $1 AND "IsDefault"`, userID).Scan(&id)
-	}
+	err = pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('default-album'), $1::int)`, int32(userID)); err != nil {
+			return err
+		}
+		err := tx.QueryRow(ctx, `SELECT "Id" FROM "Albums" WHERE "UserId" = $1 AND "IsDefault" ORDER BY "Id" LIMIT 1`, userID).Scan(&id)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		return tx.QueryRow(ctx, `
+			INSERT INTO "Albums" ("Name","Description","IsDefault","UserId")
+			VALUES ('Favorites','',true,$1)
+			RETURNING "Id"`, userID).Scan(&id)
+	})
 	return id, err
 }
 
@@ -86,17 +98,20 @@ func (s *Server) handleListAlbums(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	page, pageSize := paginationParams(r, s.cfg.PageSizes.AlbumDefault, s.cfg.PageSizes.AlbumMax)
+	page, pageSize := s.paginationParams(r, s.cfg.PageSizes.AlbumDefault, s.cfg.PageSizes.AlbumMax)
 
 	var total int64
-	_ = s.db.QueryRow(r.Context(), `SELECT COUNT(*) FROM "Albums" WHERE "UserId" = $1`, userID).Scan(&total)
+	if err := s.db.QueryRow(r.Context(), `SELECT COUNT(*) FROM "Albums" WHERE "UserId" = $1`, userID).Scan(&total); err != nil {
+		InternalError(w, r, s.log, err)
+		return
+	}
 
 	rows, err := s.db.Query(r.Context(), `
 		SELECT a."Id", a."Name", a."Description", a."IsDefault", a."UserId",
 			(SELECT COUNT(*) FROM "AlbumItems" ai WHERE ai."AlbumId" = a."Id")
 		FROM "Albums" a WHERE a."UserId" = $1
-		ORDER BY a."IsDefault" DESC, a."Name" ASC
-		LIMIT $2 OFFSET $3`, userID, pageSize, (page-1)*pageSize)
+		ORDER BY a."IsDefault" DESC, a."Name" ASC, a."Id" ASC
+		LIMIT $2 OFFSET $3`, userID, pageSize, offsetOf(page, pageSize))
 	if err != nil {
 		InternalError(w, r, s.log, err)
 		return
@@ -106,13 +121,34 @@ func (s *Server) handleListAlbums(w http.ResponseWriter, r *http.Request) {
 	items := []albumDto{}
 	for rows.Next() {
 		var a albumDto
-		if err := rows.Scan(&a.ID, &a.Name, &a.Description, &a.IsDefault, &a.UserID, &a.ImageCount); err != nil {
+		var desc *string
+		if err := rows.Scan(&a.ID, &a.Name, &desc, &a.IsDefault, &a.UserID, &a.ImageCount); err != nil {
 			InternalError(w, r, s.log, err)
 			return
 		}
+		a.Description = orEmpty(desc)
 		items = append(items, a)
 	}
-	writeJSON(w, http.StatusOK, newPaginated(items, page, pageSize, total, s.cfg.PageSizes.AlbumMax, s.cfg.PageSizes.AlbumDefault))
+	if err := rows.Err(); err != nil {
+		InternalError(w, r, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.newPaginated(items, page, pageSize, total, s.cfg.PageSizes.AlbumMax, s.cfg.PageSizes.AlbumDefault))
+}
+
+func (s *Server) loadAlbum(ctx context.Context, albumID, userID int64) (*albumDto, error) {
+	var a albumDto
+	var desc *string
+	err := s.db.QueryRow(ctx, `
+		SELECT a."Id", a."Name", a."Description", a."IsDefault", a."UserId",
+			(SELECT COUNT(*) FROM "AlbumItems" ai WHERE ai."AlbumId" = a."Id")
+		FROM "Albums" a WHERE a."Id" = $1 AND a."UserId" = $2`, albumID, userID).
+		Scan(&a.ID, &a.Name, &desc, &a.IsDefault, &a.UserID, &a.ImageCount)
+	if err != nil {
+		return nil, err
+	}
+	a.Description = orEmpty(desc)
+	return &a, nil
 }
 
 func (s *Server) handleGetAlbum(w http.ResponseWriter, r *http.Request) {
@@ -125,12 +161,7 @@ func (s *Server) handleGetAlbum(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var a albumDto
-	err := s.db.QueryRow(r.Context(), `
-		SELECT a."Id", a."Name", a."Description", a."IsDefault", a."UserId",
-			(SELECT COUNT(*) FROM "AlbumItems" ai WHERE ai."AlbumId" = a."Id")
-		FROM "Albums" a WHERE a."Id" = $1`, albumID).
-		Scan(&a.ID, &a.Name, &a.Description, &a.IsDefault, &a.UserID, &a.ImageCount)
+	a, err := s.loadAlbum(r.Context(), albumID, userID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		NotFound(w, r, fmt.Sprintf("Album with ID %d not found.", albumID))
 		return
@@ -151,10 +182,10 @@ func validateAlbumCreate(req *albumUpsertRequest) map[string][]string {
 	errs := map[string][]string{}
 	if strings.TrimSpace(req.Name) == "" {
 		errs["Name"] = append(errs["Name"], "Name is required.")
-	} else if len(req.Name) > 30 {
+	} else if runeLen(req.Name) > 30 {
 		errs["Name"] = append(errs["Name"], "Name must not exceed 30 characters.")
 	}
-	if len(req.Description) > 150 {
+	if runeLen(req.Description) > 150 {
 		errs["Description"] = append(errs["Description"], "Description must not exceed 150 characters.")
 	}
 	return errs
@@ -164,11 +195,11 @@ func validateAlbumUpdate(req *albumUpsertRequest) map[string][]string {
 	errs := map[string][]string{}
 	if strings.TrimSpace(req.Name) == "" {
 		errs["Name"] = append(errs["Name"], "Name is required.")
-	} else if len(req.Name) > 100 {
+	} else if runeLen(req.Name) > 100 {
 		errs["Name"] = append(errs["Name"], "Name must not exceed 100 characters.")
 	}
-	if len(req.Description) > 60 {
-		errs["Description"] = append(errs["Description"], "Description must not exceed 60 characters.")
+	if runeLen(req.Description) > 150 {
+		errs["Description"] = append(errs["Description"], "Description must not exceed 150 characters.")
 	}
 	return errs
 }
@@ -186,17 +217,33 @@ func (s *Server) handleCreateAlbum(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.Description = strings.TrimSpace(req.Description)
 	if errs := validateAlbumCreate(&req); len(errs) > 0 {
 		WriteValidationProblem(w, r, errs)
 		return
 	}
+
+	ctx := r.Context()
 	var a albumDto
-	err := s.db.QueryRow(r.Context(), `
-		INSERT INTO "Albums" ("Name","Description","IsDefault","UserId")
-		VALUES ($1,$2,false,$3) RETURNING "Id"`,
-		req.Name, req.Description, userID).Scan(&a.ID)
+	err := pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('albums'), $1::int)`, int32(userID)); err != nil {
+			return err
+		}
+		var count int
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM "Albums" WHERE "UserId" = $1`, userID).Scan(&count); err != nil {
+			return err
+		}
+		if count >= s.cfg.Limits.MaxAlbumsPerUser {
+			return errConflict(fmt.Sprintf("Album limit reached (maximum %d albums).", s.cfg.Limits.MaxAlbumsPerUser))
+		}
+		return tx.QueryRow(ctx, `
+			INSERT INTO "Albums" ("Name","Description","IsDefault","UserId")
+			VALUES ($1,$2,false,$3) RETURNING "Id"`,
+			req.Name, req.Description, userID).Scan(&a.ID)
+	})
 	if err != nil {
-		InternalError(w, r, s.log, err)
+		s.writeDomainError(w, r, err)
 		return
 	}
 	a.Name = req.Name
@@ -224,6 +271,8 @@ func (s *Server) handlePatchAlbum(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.Description = strings.TrimSpace(req.Description)
 	if errs := validateAlbumUpdate(&req); len(errs) > 0 {
 		WriteValidationProblem(w, r, errs)
 		return
@@ -236,18 +285,12 @@ func (s *Server) handlePatchAlbum(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if res.RowsAffected() == 0 {
-
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("null"))
 		return
 	}
-	var a albumDto
-	err = s.db.QueryRow(r.Context(), `
-		SELECT a."Id", a."Name", a."Description", a."IsDefault", a."UserId",
-			(SELECT COUNT(*) FROM "AlbumItems" ai WHERE ai."AlbumId" = a."Id")
-		FROM "Albums" a WHERE a."Id" = $1`, albumID).
-		Scan(&a.ID, &a.Name, &a.Description, &a.IsDefault, &a.UserID, &a.ImageCount)
+	a, err := s.loadAlbum(r.Context(), albumID, userID)
 	if err != nil {
 		InternalError(w, r, s.log, err)
 		return
@@ -268,7 +311,6 @@ func (s *Server) handleDeleteAlbum(w http.ResponseWriter, r *http.Request) {
 	var isDefault bool
 	err := s.db.QueryRow(r.Context(), `SELECT "IsDefault" FROM "Albums" WHERE "Id" = $1 AND "UserId" = $2`, albumID, userID).Scan(&isDefault)
 	if errors.Is(err, pgx.ErrNoRows) {
-
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -280,8 +322,7 @@ func (s *Server) handleDeleteAlbum(w http.ResponseWriter, r *http.Request) {
 		InvalidOperation(w, r, "Cannot delete the default album.")
 		return
 	}
-	_, err = s.db.Exec(r.Context(), `DELETE FROM "Albums" WHERE "Id" = $1 AND "UserId" = $2`, albumID, userID)
-	if err != nil {
+	if _, err := s.db.Exec(r.Context(), `DELETE FROM "Albums" WHERE "Id" = $1 AND "UserId" = $2 AND NOT "IsDefault"`, albumID, userID); err != nil {
 		InternalError(w, r, s.log, err)
 		return
 	}
@@ -290,6 +331,7 @@ func (s *Server) handleDeleteAlbum(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListAlbumImages(w http.ResponseWriter, r *http.Request) {
 	ident := IdentityFromContext(r.Context())
+	ctx := r.Context()
 	userID, ok := s.resolveAlbumUser(w, r, ident)
 	if !ok {
 		return
@@ -298,70 +340,54 @@ func (s *Server) handleListAlbumImages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	f, problems := parseImageFilters(r, ident)
-	if len(problems) > 0 {
-		invalidEnumProblem(w, r, problems[0].field, problems[0].value)
-		return
-	}
-	if f.reviewStatus != "Accepted" && !isModerator(ident) {
-		Forbidden(w, r, "Filtering by non-accepted review status is only available to moderators and admins.")
-		return
-	}
-	if f.childrenReviewStatus != "Accepted" && !isModerator(ident) {
-		Forbidden(w, r, "Filtering by non-accepted review status is only available to moderators and admins.")
-		return
-	}
-	page, pageSize := paginationParams(r, s.cfg.Image.DefaultPageSize, s.cfg.Image.MaxPageSize)
-
-	where, whereArgs := buildImageWhere(f, ident, &albumID, 1)
-	args := append([]any{albumID}, whereArgs...)
-
-	order, err := orderClause(f, &albumID)
-	if err != nil {
-		BadRequest(w, r, err.Error())
-		return
-	}
-
-	join := ` FROM "Images" i JOIN "AlbumItems" ai ON ai."ImageId" = i."Id" AND ai."AlbumId" = $1`
-	var total int64
-	if err := s.db.QueryRow(r.Context(), `SELECT COUNT(*)`+join+where, args...).Scan(&total); err != nil {
-		InternalError(w, r, s.log, err)
-		return
-	}
-
-	query := `SELECT i."Id", i."PerceptualHash", i."Extension", i."DominantColor", i."Source",
-		i."UploaderId", i."UploadedAt", i."IsNsfw", i."IsAnimated", i."Width", i."Height",
-		i."ByteSize", i."ReviewStatus", ai."AddedAt"` + join + where + order
-	query += fmt.Sprintf(" LIMIT %d OFFSET %d", pageSize, (page-1)*pageSize)
-
-	rows, err := s.db.Query(r.Context(), query, args...)
-	if err != nil {
-		InternalError(w, r, s.log, err)
-		return
-	}
-	defer rows.Close()
-
-	items := []imageDto{}
-	for rows.Next() {
-		var row imageRow
-		if err := rows.Scan(&row.ID, &row.PerceptualHash, &row.Extension, &row.DominantColor, &row.Source,
-			&row.UploaderID, &row.UploadedAt, &row.IsNsfw, &row.IsAnimated, &row.Width, &row.Height,
-			&row.ByteSize, &row.ReviewStatus, &row.AddedAt); err != nil {
-			InternalError(w, r, s.log, err)
-			return
-		}
-		dto, err := s.assembleImageDto(r.Context(), row, ident, f.childrenReviewStatus, f.includeMyPendingChildren, &albumID, false)
+	if !strings.EqualFold(r.PathValue("albumId"), "favorites") {
+		owned, err := s.albumOwned(ctx, albumID, userID)
 		if err != nil {
 			InternalError(w, r, s.log, err)
 			return
 		}
-		items = append(items, *dto)
+		if !owned {
+			NotFound(w, r, fmt.Sprintf("Album with ID %d not found.", albumID))
+			return
+		}
 	}
-	writeJSON(w, http.StatusOK, newPaginated(items, page, pageSize, total, s.cfg.Image.MaxPageSize, s.cfg.Image.DefaultPageSize))
+
+	f, err := s.parseImageFilters(r, ident)
+	if err != nil {
+		s.writeDomainError(w, r, err)
+		return
+	}
+	if (f.reviewStatus != "Accepted" || f.childrenReviewStatus != "Accepted") && !isModerator(ident) {
+		Forbidden(w, r, "Filtering by non-accepted review status is only available to moderators and admins.")
+		return
+	}
+	page, pageSize := s.paginationParams(r, s.cfg.Image.DefaultPageSize, s.cfg.Image.MaxPageSize)
+	if err := checkImageOrder(f, &albumID); err != nil {
+		BadRequest(w, r, err.Error())
+		return
+	}
+
+	rows, total, err := s.queryImagePage(ctx, f, ident, &albumID, page, pageSize)
+	if err != nil {
+		InternalError(w, r, s.log, err)
+		return
+	}
+	items, err := s.hydrateImages(ctx, s.db, rows, hydrateOptions{
+		ident:                    ident,
+		childrenReviewStatus:     f.childrenReviewStatus,
+		includeMyPendingChildren: f.includeMyPendingChildren,
+		withUserData:             true,
+	})
+	if err != nil {
+		InternalError(w, r, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.newPaginated(items, page, pageSize, total, s.cfg.Image.MaxPageSize, s.cfg.Image.DefaultPageSize))
 }
 
 func (s *Server) handleAddAlbumImage(w http.ResponseWriter, r *http.Request) {
 	ident := IdentityFromContext(r.Context())
+	ctx := r.Context()
 	userID, ok := s.resolveAlbumUser(w, r, ident)
 	if !ok {
 		return
@@ -376,15 +402,35 @@ func (s *Server) handleAddAlbumImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var owned bool
-	if err := s.db.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM "Albums" WHERE "Id" = $1 AND "UserId" = $2)`, albumID, userID).Scan(&owned); err != nil || !owned {
+	owned, err := s.albumOwned(ctx, albumID, userID)
+	if err != nil {
+		InternalError(w, r, s.log, err)
+		return
+	}
+	if !owned {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
-	_, err = s.db.Exec(r.Context(), `
+	var reviewStatus int
+	var uploaderID *int64
+	err = s.db.QueryRow(ctx, `SELECT "ReviewStatus", "UploaderId" FROM "Images" WHERE "Id" = $1`, imageID).Scan(&reviewStatus, &uploaderID)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !canSeeContent(ident, reviewStatus, uploaderID)) {
+		NotFound(w, r, fmt.Sprintf("Image with ID %d not found.", imageID))
+		return
+	}
+	if err != nil {
+		InternalError(w, r, s.log, err)
+		return
+	}
+
+	_, err = s.db.Exec(ctx, `
 		INSERT INTO "AlbumItems" ("AlbumId","ImageId","AddedAt") VALUES ($1,$2,now())
 		ON CONFLICT DO NOTHING`, albumID, imageID)
+	if isForeignKeyViolation(err) {
+		NotFound(w, r, fmt.Sprintf("Image with ID %d not found.", imageID))
+		return
+	}
 	if err != nil {
 		InternalError(w, r, s.log, err)
 		return
@@ -394,6 +440,7 @@ func (s *Server) handleAddAlbumImage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRemoveAlbumImage(w http.ResponseWriter, r *http.Request) {
 	ident := IdentityFromContext(r.Context())
+	ctx := r.Context()
 	userID, ok := s.resolveAlbumUser(w, r, ident)
 	if !ok {
 		return
@@ -407,12 +454,12 @@ func (s *Server) handleRemoveAlbumImage(w http.ResponseWriter, r *http.Request) 
 		RouteNotFound(w, r)
 		return
 	}
-
-	var owned bool
-	if err := s.db.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM "Albums" WHERE "Id" = $1 AND "UserId" = $2)`, albumID, userID).Scan(&owned); err != nil || !owned {
-		w.WriteHeader(http.StatusNoContent)
+	if _, err := s.db.Exec(ctx, `
+		DELETE FROM "AlbumItems" ai USING "Albums" al
+		WHERE ai."AlbumId" = al."Id" AND al."Id" = $1 AND al."UserId" = $2 AND ai."ImageId" = $3`,
+		albumID, userID, imageID); err != nil {
+		InternalError(w, r, s.log, err)
 		return
 	}
-	_, _ = s.db.Exec(r.Context(), `DELETE FROM "AlbumItems" WHERE "AlbumId" = $1 AND "ImageId" = $2`, albumID, imageID)
 	w.WriteHeader(http.StatusNoContent)
 }

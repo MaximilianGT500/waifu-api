@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useId } from 'react';
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
 
 interface PaginationProps {
@@ -7,123 +7,132 @@ interface PaginationProps {
     setPage: (page: number) => void;
     pageSize?: number;
     setPageSize?: (size: number) => void;
+    maxPageSize?: number;
     scrollTargetId?: string;
 }
 
-const Pagination = ({ currentPage, totalPages, setPage, pageSize, setPageSize, scrollTargetId }: PaginationProps) => {
+const stepClass = 'grid size-9 place-items-center rounded-full text-foreground transition-colors hover:bg-secondary disabled:pointer-events-none disabled:opacity-35';
+const numberInputClass = 'h-9 rounded-full border-[1.5px] border-input bg-card text-center text-sm font-bold text-foreground tabular outline-none transition-[border-color,box-shadow] focus:border-brand focus:ring-4 focus:ring-brand/15';
+
+const Pagination = ({ currentPage, totalPages, setPage, pageSize, setPageSize, maxPageSize = 100, scrollTargetId }: PaginationProps) => {
     const [inputVal, setInputVal] = useState(currentPage.toString());
+    const [syncedPage, setSyncedPage] = useState(currentPage);
     const [pageSizeInput, setPageSizeInput] = useState(pageSize?.toString() ?? '');
+    const [syncedPageSize, setSyncedPageSize] = useState(pageSize);
+    const pageInputId = useId();
+    const pageSizeInputId = useId();
 
-    // Sync input value when page changes externally
-    useEffect(() => {
+    if (syncedPage !== currentPage) {
+        setSyncedPage(currentPage);
         setInputVal(currentPage.toString());
-    }, [currentPage]);
-
-    // Sync page size input when pageSize changes externally
-    useEffect(() => {
-        if (pageSize !== undefined) {
-            setPageSizeInput(pageSize.toString());
-        }
-    }, [pageSize]);
+    }
+    if (syncedPageSize !== pageSize) {
+        setSyncedPageSize(pageSize);
+        if (pageSize !== undefined) setPageSizeInput(pageSize.toString());
+    }
 
     const changePage = (page: number) => {
+        if (page === currentPage) return;
         setPage(page);
         const target = scrollTargetId ? document.getElementById(scrollTargetId) : null;
-        if (target) {
-            target.scrollIntoView({ behavior: 'instant' as ScrollBehavior });
-        } else {
-            const scroller = document.querySelector('main') ?? document.scrollingElement;
-            scroller?.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
-            window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
-        }
+        if (target) target.scrollIntoView({ behavior: 'instant' as ScrollBehavior });
+        else window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
     };
 
-    // Hide if only 1 page and no page size selector
     if (totalPages <= 1 && !setPageSize) return null;
 
-    const handleFirst = () => changePage(1);
-    const handlePrev = () => changePage(Math.max(1, currentPage - 1));
-    const handleNext = () => changePage(Math.min(totalPages, currentPage + 1));
-    const handleLast = () => changePage(totalPages);
-
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        const val = parseInt(inputVal);
+    const commitPageInput = () => {
+        const val = parseInt(inputVal, 10);
         if (!isNaN(val) && val >= 1 && val <= totalPages) {
             changePage(val);
         } else {
-            setInputVal(currentPage.toString()); // Reset to current if invalid
+            setInputVal(currentPage.toString());
         }
     };
 
-    const handlePageSizeBlur = () => {
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        commitPageInput();
+    };
+
+    const commitPageSize = () => {
         if (!setPageSize || pageSize === undefined) return;
-        const val = parseInt(pageSizeInput);
+        const val = parseInt(pageSizeInput, 10);
         if (!isNaN(val) && val >= 1) {
-            setPageSize(val);
+            const clamped = Math.min(val, maxPageSize);
+            setPageSizeInput(clamped.toString());
+            if (clamped !== pageSize) setPageSize(clamped);
         } else {
             setPageSizeInput(pageSize.toString());
         }
     };
 
-    const handlePageSizeKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            handlePageSizeBlur();
-        }
-    };
-
-    // Darker text color (text-foreground) for better visibility in light mode
-    const buttonClass = "p-2 rounded-md border border-border bg-card hover:bg-secondary disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-foreground";
-
     return (
-        <div className="flex flex-wrap justify-center items-center gap-1.5 py-6 select-none">
-            {/* Page size input */}
-            {setPageSize && pageSize !== undefined && (
-                <div className="flex items-center gap-1.5 mr-2">
-                    <input
-                        type="text"
-                        value={pageSizeInput}
-                        onChange={(e) => setPageSizeInput(e.target.value)}
-                        onBlur={handlePageSizeBlur}
-                        onKeyDown={handlePageSizeKeyDown}
-                        className="w-12 py-1.5 text-center text-sm font-bold bg-secondary border border-transparent focus:border-primary rounded-md outline-none transition-all text-foreground"
-                    />
-                    <span className="text-sm text-muted-foreground">/ page</span>
+        <nav aria-label="Pagination" className="flex select-none flex-wrap items-center justify-center gap-x-6 gap-y-3 py-8">
+            {totalPages > 1 && (
+                <div className="flex items-center gap-1 rounded-full bg-card p-1 shadow-card dark:ring-1 dark:ring-white/6">
+                    <button type="button" onClick={() => changePage(1)} disabled={currentPage === 1} className={stepClass} title="First page" aria-label="First page">
+                        <ChevronsLeft size={17} aria-hidden="true" />
+                    </button>
+                    <button type="button" onClick={() => changePage(Math.max(1, currentPage - 1))} disabled={currentPage === 1} className={stepClass} title="Previous page" aria-label="Previous page">
+                        <ChevronLeft size={17} aria-hidden="true" />
+                    </button>
+
+                    <form onSubmit={handleSubmit} className="mx-1.5 flex items-center gap-2 text-sm">
+                        <label htmlFor={pageInputId} className="sr-only">Page number, {totalPages} pages in total</label>
+                        <input
+                            id={pageInputId}
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            autoComplete="off"
+                            maxLength={7}
+                            value={inputVal}
+                            onChange={(e) => setInputVal(e.target.value.replace(/\D/g, ''))}
+                            onBlur={commitPageInput}
+                            enterKeyHint="go"
+                            aria-current="page"
+                            className={`${numberInputClass} w-14`}
+                        />
+                        <span className="whitespace-nowrap text-muted-foreground tabular" aria-hidden="true">of {totalPages}</span>
+                    </form>
+
+                    <button type="button" onClick={() => changePage(Math.min(totalPages, currentPage + 1))} disabled={currentPage === totalPages} className={stepClass} title="Next page" aria-label="Next page">
+                        <ChevronRight size={17} aria-hidden="true" />
+                    </button>
+                    <button type="button" onClick={() => changePage(totalPages)} disabled={currentPage === totalPages} className={stepClass} title="Last page" aria-label={`Last page (${totalPages})`}>
+                        <ChevronsRight size={17} aria-hidden="true" />
+                    </button>
                 </div>
             )}
 
-            {totalPages > 1 && (
-                <>
-                    {/* First & Prev */}
-                    <button onClick={handleFirst} disabled={currentPage === 1} className={buttonClass} title="First Page">
-                        <ChevronsLeft size={18} />
-                    </button>
-                    <button onClick={handlePrev} disabled={currentPage === 1} className={buttonClass} title="Previous Page">
-                        <ChevronLeft size={18} />
-                    </button>
-
-                    {/* Page Input */}
-                    <form onSubmit={handleSubmit} className="flex items-center gap-2 mx-1">
-                        <input
-                            type="text"
-                            value={inputVal}
-                            onChange={(e) => setInputVal(e.target.value)}
-                            className="w-12 py-1.5 text-center text-base font-bold bg-secondary border border-transparent focus:border-primary rounded-md outline-none transition-all text-foreground"
-                        />
-                        <span className="text-base font-bold text-foreground opacity-80">/ {totalPages}</span>
-                    </form>
-
-                    {/* Next & Last */}
-                    <button onClick={handleNext} disabled={currentPage === totalPages} className={buttonClass} title="Next Page">
-                        <ChevronRight size={18} />
-                    </button>
-                    <button onClick={handleLast} disabled={currentPage === totalPages} className={buttonClass} title="Last Page">
-                        <ChevronsRight size={18} />
-                    </button>
-                </>
+            {setPageSize && pageSize !== undefined && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <label htmlFor={pageSizeInputId}>Per page</label>
+                    <input
+                        id={pageSizeInputId}
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        autoComplete="off"
+                        maxLength={4}
+                        enterKeyHint="done"
+                        value={pageSizeInput}
+                        aria-describedby={`${pageSizeInputId}-hint`}
+                        onChange={(e) => setPageSizeInput(e.target.value.replace(/\D/g, ''))}
+                        onBlur={commitPageSize}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                commitPageSize();
+                            }
+                        }}
+                        className={`${numberInputClass} w-14`}
+                    />
+                    <span id={`${pageSizeInputId}-hint`} className="sr-only">Between 1 and {maxPageSize}</span>
+                </div>
             )}
-        </div>
+        </nav>
     );
 };
 

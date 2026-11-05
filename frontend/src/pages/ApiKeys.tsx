@@ -1,11 +1,31 @@
-﻿import { useState, useEffect } from 'react';
+import { useState, useEffect, useEffectEvent, useRef } from 'react';
 import api from '../services/api';
 import { ApiKeyDto } from '../types';
 import { useNotification } from '../context/NotificationContext';
 import Modal from '../components/Modal';
 import ConfirmModal from '../components/modals/ConfirmModal';
-import { Key, Plus, Trash2, Copy, Calendar, Shield, Clock, Edit2, AlertTriangle } from 'lucide-react';
+import { Key, Plus, Trash2, Copy, Calendar, Shield, Clock, Edit2, TriangleAlert } from 'lucide-react';
+import { getEnv } from '../utils/env';
 import { useRequireAuth } from '../hooks/useRequireAuth';
+import { MetaTags } from '../hooks/useMetaTags';
+
+const DESCRIPTION_MAX = 100;
+
+const pad = (n: number) => String(n).padStart(2, '0');
+
+function toDateInput(date: Date): string {
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function endOfDayIso(value: string): string {
+    return new Date(`${value}T23:59:59`).toISOString();
+}
+
+function tomorrow(): string {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return toDateInput(d);
+}
 
 const ApiKeys = () => {
     const user = useRequireAuth();
@@ -13,14 +33,18 @@ const ApiKeys = () => {
     const [keys, setKeys] = useState<ApiKeyDto[]>([]);
     const [loading, setLoading] = useState(true);
 
-    // Create/Edit State
     const [isCreateOpen, setIsCreateOpen] = useState(false);
     const [isEditOpen, setIsEditOpen] = useState(false);
     const [keyFormData, setKeyFormData] = useState({ description: '', expirationDate: '' });
     const [createdKey, setCreatedKey] = useState<string | null>(null);
+    const copyButtonRef = useRef<HTMLButtonElement>(null);
+    useEffect(() => {
+        if (createdKey) copyButtonRef.current?.focus();
+    }, [createdKey]);
+    const [isSaving, setIsSaving] = useState(false);
 
-    // Revoke State
     const [isRevokeOpen, setIsRevokeOpen] = useState(false);
+    const [now] = useState(() => Date.now());
     const [selectedKey, setSelectedKey] = useState<ApiKeyDto | null>(null);
 
     const fetchKeys = async () => {
@@ -29,46 +53,54 @@ const ApiKeys = () => {
         try {
             const { data } = await api.get<ApiKeyDto[]>('/auth/api-keys');
             setKeys(data);
-        } catch (err: any) { 
-            // showNotification('error', err.message); // Handled globally
+        } catch {
+            return;
         } finally { setLoading(false); }
     };
 
-    useEffect(() => { 
-        if (user) {
-            fetchKeys(); 
-        }
+    const loadKeys = useEffectEvent(() => { fetchKeys(); });
+
+    useEffect(() => {
+        if (user) loadKeys();
     }, [user]);
 
+    const descriptionLength = [...keyFormData.description.trim()].length;
+    const descriptionTooLong = descriptionLength > DESCRIPTION_MAX;
+    const descriptionValid = descriptionLength >= 3 && !descriptionTooLong;
+
     const handleCreate = async () => {
+        if (isSaving || !descriptionValid) return;
+        setIsSaving(true);
         try {
-            const payload: any = { description: keyFormData.description };
-            if (keyFormData.expirationDate) payload.expirationDate = new Date(keyFormData.expirationDate).toISOString();
+            const payload: { description: string; expirationDate?: string } = { description: keyFormData.description.trim() };
+            if (keyFormData.expirationDate) payload.expirationDate = endOfDayIso(keyFormData.expirationDate);
 
             const { data } = await api.post<ApiKeyDto & { key?: string, token?: string }>('/auth/api-keys', payload);
             setCreatedKey(data.key || data.token || "Error: Token not received");
             fetchKeys();
             setKeyFormData({ description: '', expirationDate: '' });
-        } catch (err: any) { 
-            // showNotification('error', err.message); // Handled globally
+        } catch {
+        } finally {
+            setIsSaving(false);
         }
     };
 
     const handleEdit = async () => {
-        if (!selectedKey) return;
+        if (!selectedKey || isSaving || !descriptionValid) return;
+        setIsSaving(true);
         try {
-            const payload: any = { description: keyFormData.description };
-            // Handle expiration: empty string means no change or remove? 
-            // Typically null sends "remove", string sends "date".
-            if (keyFormData.expirationDate) payload.expirationDate = new Date(keyFormData.expirationDate).toISOString();
-            else payload.expirationDate = null;
+            const payload = {
+                description: keyFormData.description.trim(),
+                expirationDate: keyFormData.expirationDate ? endOfDayIso(keyFormData.expirationDate) : null,
+            };
 
             await api.patch(`/auth/api-keys/${selectedKey.id}`, payload);
             showNotification('success', 'API Key updated');
             setIsEditOpen(false);
             fetchKeys();
-        } catch (err: any) { 
-            // showNotification('error', err.message); // Handled globally
+        } catch {
+        } finally {
+            setIsSaving(false);
         }
     };
 
@@ -79,122 +111,153 @@ const ApiKeys = () => {
             showNotification('success', 'API Key revoked');
             setIsRevokeOpen(false);
             fetchKeys();
-        } catch (err: any) { 
-            // showNotification('error', err.message); // Handled globally
+        } catch {
         }
     };
 
-    const copyToClipboard = (text: string) => {
+    const copyToClipboard = async (text: string) => {
         if (!text) return;
-        navigator.clipboard.writeText(text);
-        showNotification('success', 'Copied to clipboard');
+        try {
+            await navigator.clipboard.writeText(text);
+            showNotification('success', 'Copied to clipboard');
+        } catch {
+            showNotification('warning', 'Could not access the clipboard. Please select the key and copy it manually.');
+        }
     };
 
     const openEdit = (key: ApiKeyDto) => {
         setSelectedKey(key);
-        // Format date to YYYY-MM-DD for input[type="date"]
-        const dateStr = key.expirationDate ? new Date(key.expirationDate).toISOString().split('T')[0] : '';
+        const dateStr = key.expirationDate ? toDateInput(new Date(key.expirationDate)) : '';
         setKeyFormData({ description: key.description, expirationDate: dateStr });
         setIsEditOpen(true);
     };
 
     if (!user) return null;
 
+    const rawBase = getEnv('VITE_API_URL') || '/api';
+    const apiBase = (rawBase.startsWith('/') ? `${window.location.origin}${rawBase}` : rawBase).replace(/\/$/, '');
+
     return (
-        <div className="container mx-auto p-6 md:p-10">
-            <div className="flex justify-between items-center mb-10">
+        <div className="page">
+            <MetaTags title="API Keys" description="Manage your API keys." />
+            <div className="page-header">
                 <div>
-                    <h1 className="text-3xl font-black flex items-center gap-3 text-foreground"><Key className="text-primary" size={32}/> API Keys</h1>
-                    <p className="text-muted-foreground mt-1">Manage access tokens for external applications.</p>
+                    <h1 className="page-title">API Keys</h1>
+                    <p className="page-lede">Keys let your bots and apps call the API in your name. Send one in the <code className="whitespace-nowrap rounded-md bg-secondary px-1.5 py-0.5 font-mono text-[0.85em] text-foreground">X-Api-Key</code> header.</p>
                 </div>
-                <button onClick={() => { setCreatedKey(null); setKeyFormData({description:'', expirationDate:''}); setIsCreateOpen(true); }} className="flex items-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-xl font-bold hover:opacity-90 shadow-lg transition-all whitespace-nowrap"><Plus size={20} /> <span className="hidden sm:inline">Generate Key</span></button>
+                <button
+                    type="button"
+                    aria-label="Generate API key"
+                    onClick={() => { setCreatedKey(null); setKeyFormData({ description: '', expirationDate: '' }); setIsCreateOpen(true); }}
+                    className="btn btn-primary shrink-0 self-start md:self-auto"
+                >
+                    <Plus size={18} aria-hidden="true" /> <span className="hidden sm:inline">Generate Key</span>
+                </button>
             </div>
 
-            <div className="grid gap-4">
-                {loading ? [...Array(3)].map((_,i) => <div key={i} className="h-24 bg-muted rounded-xl animate-pulse"/>) :
-                    keys.length === 0 ? (
-                            <div className="text-center p-12 border-2 border-dashed border-border rounded-xl text-muted-foreground">
-                                <Key size={48} className="mx-auto mb-4 opacity-20"/>
-                                <p>No API keys found.</p>
-                            </div>
-                        ) :
-                        keys.map(key => (
-                            <div key={key.id} className="bg-card border border-border rounded-xl p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 hover:shadow-md transition-all">
-                                <div>
-                                    <div className="flex items-center gap-3 mb-2">
-                                        <span className="font-bold text-lg">{key.description}</span>
-                                    </div>
+            <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_24rem]">
+                <section aria-label="Your API keys" className="panel overflow-hidden">
+                    {loading ? (
+                        <div className="divide-y divide-border">
+                            {[...Array(3)].map((_, i) => <div key={i} className="h-20 animate-pulse bg-secondary/50" />)}
+                        </div>
+                    ) : keys.length === 0 ? (
+                        <div className="flex flex-col items-center px-6 py-14 text-center">
+                            <span className="mb-4 grid size-12 place-items-center rounded-2xl bg-brand-soft text-brand-ink" aria-hidden="true">
+                                <Key size={22} />
+                            </span>
+                            <p className="font-semibold">No API keys yet</p>
+                            <p className="mt-1 max-w-sm text-sm text-muted-foreground">Generate a key to call the API from scripts, bots or other apps.</p>
+                        </div>
+                    ) : (
+                        <ul className="divide-y divide-border">
+                            {keys.map(key => {
+                                const expired = !!key.expirationDate && new Date(key.expirationDate).getTime() < now;
+                                return (
+                                    <li key={key.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                                        <div className="min-w-0">
+                                            <p className="flex flex-wrap items-center gap-2">
+                                                <span className="truncate font-semibold">{key.description}</span>
+                                                {expired && <span className="inline-flex items-center rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-semibold text-destructive">Expired</span>}
+                                            </p>
+                                            <dl className="mt-1.5 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
+                                                <div className="flex items-center gap-1.5"><Calendar size={13} aria-hidden="true" /><dt className="sr-only">Created</dt><dd>Created {new Date(key.createdAt).toLocaleDateString()}</dd></div>
+                                                <div className="flex items-center gap-1.5"><Shield size={13} aria-hidden="true" /><dt className="sr-only">Last used</dt><dd>{key.lastUsedAt ? `Last used ${new Date(key.lastUsedAt).toLocaleDateString()}` : 'Never used'}</dd></div>
+                                                <div className="flex items-center gap-1.5"><Clock size={13} aria-hidden="true" /><dt className="sr-only">Expires</dt><dd>{key.expirationDate ? `${expired ? 'Expired' : 'Expires'} ${new Date(key.expirationDate).toLocaleDateString()}` : 'No expiration'}</dd></div>
+                                            </dl>
+                                        </div>
+                                        <div className="flex shrink-0 items-center gap-1">
+                                            <button type="button" onClick={() => openEdit(key)} className="btn btn-ghost btn-sm">
+                                                <Edit2 size={14} aria-hidden="true" /> Edit
+                                            </button>
+                                            <button type="button" onClick={() => { setSelectedKey(key); setIsRevokeOpen(true); }} className="btn btn-sm text-destructive hover:bg-destructive/10">
+                                                <Trash2 size={14} aria-hidden="true" /> Revoke
+                                            </button>
+                                        </div>
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    )}
+                </section>
 
-                                    <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
-                                        <span className="flex items-center gap-1.5"><Calendar size={14}/> {new Date(key.createdAt).toLocaleDateString()}</span>
-                                        <span className="flex items-center gap-1.5"><Shield size={14}/> {key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleDateString() : "Never used"}</span>
-                                        <span className="flex items-center gap-1.5"><Clock size={14}/> {key.expirationDate ? new Date(key.expirationDate).toLocaleDateString() : "No expiration"}</span>
-                                    </div>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <button onClick={() => openEdit(key)} className="px-3 py-2 bg-secondary hover:bg-secondary/80 rounded-lg font-bold transition-colors text-sm flex items-center gap-2">
-                                        <Edit2 size={16} /> Edit
-                                    </button>
-                                    <button onClick={() => { setSelectedKey(key); setIsRevokeOpen(true); }} className="px-3 py-2 bg-secondary text-red-600 hover:bg-red-500/10 rounded-lg font-bold transition-colors text-sm flex items-center gap-2">
-                                        <Trash2 size={16} /> Revoke
-                                    </button>
-                                </div>
-                            </div>
-                        ))}
+                <aside className="panel p-5">
+                    <h2 className="section-title">Use a key</h2>
+                    <p className="mt-1 text-sm text-muted-foreground">Requests with a key count towards your account and its limits.</p>
+                    <pre className="mt-4 overflow-x-auto rounded-2xl bg-secondary p-4 font-mono text-[0.8125rem] leading-6 text-foreground"><code>{`curl ${apiBase}/images \\\n  -H "X-Api-Key: <your key>"`}</code></pre>
+                </aside>
             </div>
 
-            {/* Create Modal */}
             <Modal isOpen={isCreateOpen} onClose={() => { setIsCreateOpen(false); setCreatedKey(null); }} title="Generate API Key">
                 {!createdKey ? (
-                    <div className="space-y-4">
+                    <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); handleCreate(); }}>
                         <div>
-                            <label className="block text-sm font-bold mb-1">Description</label>
-                            <input value={keyFormData.description} onChange={e => setKeyFormData({...keyFormData, description: e.target.value})} className="w-full p-3 bg-secondary rounded-lg outline-none focus:ring-1 focus:ring-primary text-foreground" placeholder="e.g. My Bot" autoFocus/>
+                            <label htmlFor="api-key-description" className="field-label">Description</label>
+                            <input id="api-key-description" value={keyFormData.description} autoComplete="off" onChange={e => setKeyFormData({ ...keyFormData, description: e.target.value })} aria-invalid={descriptionTooLong} aria-describedby="api-key-description-hint" className="input" placeholder="e.g. My Bot" data-autofocus />
+                            <p id="api-key-description-hint" className={`field-hint ${descriptionTooLong ? 'text-destructive' : ''}`}>3–{DESCRIPTION_MAX} characters ({descriptionLength}/{DESCRIPTION_MAX}).</p>
                         </div>
                         <div>
-                            <label className="block text-sm font-bold mb-1">Expiration (Optional)</label>
-                            <input type="date" value={keyFormData.expirationDate} onChange={e => setKeyFormData({...keyFormData, expirationDate: e.target.value})} className="w-full p-3 bg-secondary rounded-lg outline-none focus:ring-1 focus:ring-primary text-foreground"/>
+                            <label htmlFor="api-key-expiration" className="field-label">Expiration (optional)</label>
+                            <input id="api-key-expiration" type="date" min={tomorrow()} value={keyFormData.expirationDate} onChange={e => setKeyFormData({ ...keyFormData, expirationDate: e.target.value })} className="input" />
+                            <p className="field-hint">The key stays valid until the end of the selected day.</p>
                         </div>
-                        <button onClick={handleCreate} disabled={!keyFormData.description} className="w-full py-3 bg-primary text-primary-foreground font-bold rounded-lg mt-2 disabled:opacity-50">Generate</button>
-                    </div>
+                        <button type="submit" disabled={!descriptionValid || isSaving} aria-busy={isSaving} className="btn btn-primary w-full">{isSaving ? 'Generating…' : 'Generate'}</button>
+                    </form>
                 ) : (
-                    <div className="space-y-4 text-center">
-                        <div className="bg-green-500/10 text-green-600 p-4 rounded-xl mb-4 border border-green-500/20">
-                            <p className="font-bold">Key Generated Successfully</p>
-                        </div>
-                        <div className="bg-amber-500/10 text-amber-600 p-4 rounded-xl mb-4 border border-amber-500/20 flex items-start gap-3">
-                            <AlertTriangle size={20} className="flex-shrink-0 mt-0.5" />
+                    <div className="space-y-4">
+                        <div className="flex items-start gap-3 rounded-2xl bg-warning/12 p-4">
+                            <TriangleAlert size={18} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
                             <div>
-                                <p className="font-bold text-sm">This key will not be displayed again</p>
-                                <p className="text-xs mt-1">Make sure to copy and store it in a safe place. If you lose it, you will need to generate a new one.</p>
+                                <p className="text-sm font-bold">Copy the key now</p>
+                                <p className="mt-0.5 text-sm text-muted-foreground">It is shown only once. If you lose it, generate a new one and revoke this key.</p>
                             </div>
                         </div>
-                        <div onClick={() => copyToClipboard(createdKey)} className="group relative flex items-center gap-2 bg-secondary p-4 rounded-xl border border-border cursor-pointer hover:border-primary/50 transition-colors">
-                            <code className="flex-1 text-sm break-all font-mono text-left">{createdKey}</code>
-                            <Copy size={18} className="text-muted-foreground group-hover:text-foreground"/>
-                        </div>
-                        <button onClick={() => { setIsCreateOpen(false); setCreatedKey(null); }} className="w-full py-3 bg-primary text-primary-foreground font-bold rounded-lg">Done</button>
+                        <button ref={copyButtonRef} type="button" onClick={() => copyToClipboard(createdKey)} aria-label="Copy the API key to the clipboard" className="group relative flex w-full cursor-pointer items-center gap-3 rounded-2xl border border-border bg-secondary p-4 text-left transition-colors hover:border-brand/50" data-autofocus>
+                            <code className="flex-1 select-all break-all font-mono text-sm">{createdKey}</code>
+                            <Copy size={17} aria-hidden="true" className="shrink-0 text-muted-foreground group-hover:text-foreground" />
+                        </button>
+                        <button type="button" onClick={() => { setIsCreateOpen(false); setCreatedKey(null); }} className="btn btn-primary w-full">Done</button>
                     </div>
                 )}
             </Modal>
 
-            {/* Edit Modal */}
             <Modal isOpen={isEditOpen} onClose={() => setIsEditOpen(false)} title="Edit API Key">
-                <div className="space-y-4">
+                <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); handleEdit(); }}>
                     <div>
-                        <label className="block text-sm font-bold mb-1">Description</label>
-                        <input value={keyFormData.description} onChange={e => setKeyFormData({...keyFormData, description: e.target.value})} className="w-full p-3 bg-secondary rounded-lg outline-none focus:ring-1 focus:ring-primary text-foreground" />
+                        <label htmlFor="api-key-edit-description" className="field-label">Description</label>
+                        <input id="api-key-edit-description" value={keyFormData.description} autoComplete="off" onChange={e => setKeyFormData({ ...keyFormData, description: e.target.value })} aria-invalid={descriptionTooLong} aria-describedby="api-key-edit-description-hint" className="input" data-autofocus />
+                        <p id="api-key-edit-description-hint" className={`field-hint ${descriptionTooLong ? 'text-destructive' : ''}`}>3–{DESCRIPTION_MAX} characters ({descriptionLength}/{DESCRIPTION_MAX}).</p>
                     </div>
                     <div>
-                        <label className="block text-sm font-bold mb-1">Expiration (Optional)</label>
-                        <input type="date" value={keyFormData.expirationDate} onChange={e => setKeyFormData({...keyFormData, expirationDate: e.target.value})} className="w-full p-3 bg-secondary rounded-lg outline-none focus:ring-1 focus:ring-primary text-foreground"/>
-                        <p className="text-xs text-muted-foreground mt-1">Clear date to make it non-expiring.</p>
+                        <label htmlFor="api-key-edit-expiration" className="field-label">Expiration (optional)</label>
+                        <input id="api-key-edit-expiration" type="date" value={keyFormData.expirationDate} onChange={e => setKeyFormData({ ...keyFormData, expirationDate: e.target.value })} className="input" />
+                        <p className="field-hint">Clear the date to make the key non-expiring.</p>
                     </div>
-                    <button onClick={handleEdit} className="w-full py-3 bg-primary text-primary-foreground font-bold rounded-lg mt-2">Save Changes</button>
-                </div>
+                    <button type="submit" disabled={!descriptionValid || isSaving} aria-busy={isSaving} className="btn btn-primary w-full">{isSaving ? 'Saving…' : 'Save Changes'}</button>
+                </form>
             </Modal>
 
-            <ConfirmModal isOpen={isRevokeOpen} onClose={() => setIsRevokeOpen(false)} onConfirm={handleRevoke} title="Revoke API Key" message="Are you sure? This action cannot be undone." confirmText="Revoke" />
+            <ConfirmModal isOpen={isRevokeOpen} onClose={() => setIsRevokeOpen(false)} onConfirm={handleRevoke} title="Revoke API Key" message={<p>Revoke <strong className="text-foreground">{selectedKey?.description}</strong>? Apps using this key stop working immediately.</p>} confirmText="Revoke" />
         </div>
     );
 };

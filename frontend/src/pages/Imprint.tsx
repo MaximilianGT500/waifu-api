@@ -1,30 +1,30 @@
 import { getEnv } from '../utils/env';
 import { Mail, MessageSquare, Phone, MapPin, Scale } from 'lucide-react';
 import { MetaTags } from '../hooks/useMetaTags';
+import ExternalLink from '../components/ExternalLink';
+import { safeExternalUrl } from '../utils/safeUrl';
 
 const Imprint = () => {
     const appTitle = getEnv('VITE_APP_TITLE') || 'Waifu API';
-    const discordServerUrl = getEnv('VITE_DISCORD_SERVER_URL');
-    const githubUrl = getEnv('VITE_GITHUB_URL');
+    const discordServerUrl = safeExternalUrl(getEnv('VITE_DISCORD_SERVER_URL'));
+    const githubUrl = safeExternalUrl(getEnv('VITE_GITHUB_URL'));
 
     return (
-        <div className="container mx-auto px-4 py-12 max-w-4xl">
+        <div className="page-narrow">
             <MetaTags
                 title="Imprint"
                 description={`Legal notice for ${appTitle}.`}
             />
-            <div className="text-center mb-12">
-                <h1 className="text-4xl font-black mb-4 bg-gradient-to-r from-primary to-purple-600 bg-clip-text text-transparent">
-                    Imprint
-                </h1>
-                <p className="text-xl text-muted-foreground">
+            <header className="mb-10">
+                <h1 className="page-title">Imprint</h1>
+                <p className="page-lede">
                     Information pursuant to § 5 DDG (German Digital Services Act)
                 </p>
-            </div>
+            </header>
 
-            <div className="space-y-6">
-                <section className="p-8 bg-card border border-border rounded-2xl">
-                    <h2 className="text-xl font-bold mb-4">Operator</h2>
+            <div className="space-y-10">
+                <section className="panel p-6 sm:p-8">
+                    <h2 className="section-title mb-4">Operator</h2>
                     <div className="grid sm:grid-cols-2 gap-6 text-sm">
                         <div className="space-y-2">
                             <div>
@@ -32,11 +32,11 @@ const Imprint = () => {
                                 <p className="text-muted-foreground">Legal form: Sole proprietorship (Einzelunternehmen)</p>
                             </div>
                             <div>
-                                <p className="font-semibold text-muted-foreground uppercase text-xs tracking-wider mb-1">Owner</p>
+                                <p className="mb-1 text-xs font-semibold text-muted-foreground">Owner</p>
                                 <p>Maximilian Stumpf</p>
                             </div>
                             <div className="flex items-start gap-2">
-                                <MapPin size={16} className="mt-0.5 shrink-0 text-primary" />
+                                <MapPin size={16} className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden="true" />
                                 <div>
                                     <p>Leutragraben 1</p>
                                     <p>07743 Jena</p>
@@ -44,7 +44,7 @@ const Imprint = () => {
                                 </div>
                             </div>
                             <div>
-                                <p className="font-semibold text-muted-foreground uppercase text-xs tracking-wider mb-1">Branch office</p>
+                                <p className="mb-1 text-xs font-semibold text-muted-foreground">Branch office</p>
                                 <p>Frankenstraße 152</p>
                                 <p>90461 Nürnberg</p>
                                 <p>Bavaria, Germany</p>
@@ -52,41 +52,41 @@ const Imprint = () => {
                         </div>
                         <div className="space-y-3">
                             <div>
-                                <p className="font-semibold text-muted-foreground uppercase text-xs tracking-wider mb-1">VAT ID (USt-IdNr.)</p>
+                                <p className="mb-1 text-xs font-semibold text-muted-foreground">VAT ID (USt-IdNr.)</p>
                                 <p>DE456123333</p>
                             </div>
-                            <a href="mailto:support@lunoxia.de" className="flex items-center gap-3 text-primary hover:underline">
-                                <Mail size={18} />
+                            <a href="mailto:support@lunoxia.de" className="flex items-center gap-3 font-medium text-brand-ink hover:underline">
+                                <Mail size={17} aria-hidden="true" />
                                 support@lunoxia.de
                             </a>
                             <a href="tel:+498008002200" className="flex items-center gap-3 text-foreground hover:underline">
-                                <Phone size={18} />
+                                <Phone size={17} aria-hidden="true" />
                                 +49 800 8002200
                             </a>
                             <div className="flex items-center gap-3 text-muted-foreground">
-                                <Phone size={18} />
+                                <Phone size={17} aria-hidden="true" />
                                 <span>+49 3641 5541001 <span className="text-xs">(emergency)</span></span>
                             </div>
                             {discordServerUrl && (
-                                <a href={discordServerUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 text-[#5865F2] hover:underline">
-                                    <MessageSquare size={18} />
+                                <ExternalLink href={discordServerUrl} trusted className="flex items-center gap-3 text-[#5865F2] hover:underline">
+                                    <MessageSquare size={17} aria-hidden="true" />
                                     Discord Community
-                                </a>
+                                </ExternalLink>
                             )}
                         </div>
                     </div>
                 </section>
 
-                <section className="p-8 bg-card border border-border rounded-2xl">
-                    <h2 className="text-xl font-bold mb-4">Legal Notice</h2>
+                <section>
+                    <h2 className="section-title mb-2">Legal Notice</h2>
                     <p className="text-muted-foreground leading-relaxed">
                         Lunoxia is a sole proprietorship operating under German law. The company is
                         subject to the law of the Federal Republic of Germany.
                     </p>
                 </section>
 
-                <section className="p-8 bg-card border border-border rounded-2xl">
-                    <h2 className="text-xl font-bold mb-4">Liability for Content</h2>
+                <section>
+                    <h2 className="section-title mb-2">Liability for Content</h2>
                     <p className="text-muted-foreground leading-relaxed">
                         As a service provider, we are responsible for our own content on these pages in
                         accordance with § 7 (1) DDG and general laws. Pursuant to §§ 8 to 10 DDG, however,
@@ -95,8 +95,8 @@ const Imprint = () => {
                     </p>
                 </section>
 
-                <section className="p-8 bg-card border border-border rounded-2xl">
-                    <h2 className="text-xl font-bold mb-4">Liability for Links</h2>
+                <section>
+                    <h2 className="section-title mb-2">Liability for Links</h2>
                     <p className="text-muted-foreground leading-relaxed">
                         Our service contains links to external websites of third parties over whose content
                         we have no influence. Therefore we cannot assume any liability for such third-party
@@ -105,8 +105,8 @@ const Imprint = () => {
                     </p>
                 </section>
 
-                <section className="p-8 bg-card border border-border rounded-2xl">
-                    <h2 className="text-xl font-bold mb-4">Copyright</h2>
+                <section>
+                    <h2 className="section-title mb-2">Copyright</h2>
                     <p className="text-muted-foreground leading-relaxed">
                         The content and works created by the site operators on these pages are subject to
                         German copyright law. Reproduction, editing, distribution and any kind of use outside
@@ -115,12 +115,12 @@ const Imprint = () => {
                 </section>
 
                 {githubUrl && (
-                    <section className="p-8 bg-card border border-border rounded-2xl">
-                        <h2 className="text-xl font-bold mb-4">Project</h2>
-                        <a href={githubUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 text-primary hover:underline">
-                            <Scale size={18} />
+                    <section>
+                    <h2 className="section-title mb-2">Project</h2>
+                        <ExternalLink href={githubUrl} trusted className="inline-flex items-center gap-2 font-medium text-brand-ink hover:underline">
+                            <Scale size={16} aria-hidden="true" />
                             Source code on GitHub
-                        </a>
+                        </ExternalLink>
                     </section>
                 )}
             </div>

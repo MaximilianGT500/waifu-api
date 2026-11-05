@@ -1,5 +1,5 @@
 # Stage 1: Build documentation
-FROM node:20-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /app
 
 ARG DOCS_URL
@@ -22,10 +22,11 @@ ENV APP_TAGLINE=${APP_TAGLINE}
 ENV FRONTEND_URL=${FRONTEND_URL}
 ENV GITHUB_URL=${GITHUB_URL}
 
-# Copy package files
+# Copy package files. Install scripts stay off: postman-code-generators would otherwise install
+# packages for its code generators outside the lockfile (no integrity check, overrides ignored).
 COPY docs/package*.json ./
 
-RUN npm ci
+RUN npm ci --ignore-scripts --no-audit --no-fund
 
 # Copy docs source
 COPY docs/ .
@@ -41,19 +42,27 @@ RUN npx docusaurus gen-api-docs all
 RUN npm run build
 
 # Stage 2: Serve with nginx
-FROM nginx:alpine AS final
+FROM nginx:stable-alpine AS final
 
 COPY --from=build /app/build /usr/share/nginx/html
 
-# Custom nginx config for SPA routing
-RUN echo 'server { \
-    listen 80; \
-    root /usr/share/nginx/html; \
-    index index.html; \
-    location / { \
-        try_files $uri $uri/ /index.html; \
-    } \
-}' > /etc/nginx/conf.d/default.conf
+# Custom nginx config for SPA routing (+ basic hardening headers)
+RUN printf '%s\n' \
+    'server_tokens off;' \
+    'server {' \
+    '    listen 80;' \
+    '    root /usr/share/nginx/html;' \
+    '    index index.html;' \
+    '    gzip on;' \
+    '    gzip_types text/css application/javascript application/json image/svg+xml;' \
+    '    add_header X-Content-Type-Options "nosniff" always;' \
+    '    add_header X-Frame-Options "SAMEORIGIN" always;' \
+    '    add_header Referrer-Policy "strict-origin-when-cross-origin" always;' \
+    '    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;' \
+    '    location / {' \
+    '        try_files $uri $uri/ /index.html;' \
+    '    }' \
+    '}' > /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
 

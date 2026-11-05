@@ -1,4 +1,4 @@
-﻿window.env = {
+window.env = {
     VITE_API_URL: "",
     VITE_DISCORD_CLIENT_ID: "",
     VITE_DISCORD_REDIRECT_URI: "",
@@ -13,5 +13,6 @@
     VITE_IMG_TRANSFORM_PATH: "",
     VITE_IMG_WIDTH_PARAM: "width",
     VITE_IMG_CARD_WIDTH: "640",
-    VITE_IMG_PREVIEW_WIDTH: "1280"
+    VITE_IMG_PREVIEW_WIDTH: "1280",
+    VITE_CDN_ORIGIN: ""
 };

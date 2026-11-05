@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Megaphone, Save, Eye, EyeOff } from 'lucide-react';
+import { Save } from 'lucide-react';
 import api from '../services/api';
 import { useRequireAuth } from '../hooks/useRequireAuth';
 import { usePermissions, invalidateBanner } from '../hooks/useBanner';
@@ -11,16 +11,12 @@ import { BannerSettings, BannerVariant } from '../types';
 const MAX_MESSAGE_LENGTH = 500;
 
 const variants: { value: BannerVariant; label: string; dot: string }[] = [
-    { value: BannerVariant.Info, label: 'Info', dot: 'bg-blue-500' },
-    { value: BannerVariant.Success, label: 'Success', dot: 'bg-emerald-500' },
-    { value: BannerVariant.Warning, label: 'Warning', dot: 'bg-amber-500' },
-    { value: BannerVariant.Danger, label: 'Danger', dot: 'bg-red-500' },
+    { value: BannerVariant.Info, label: 'Info', dot: 'bg-info' },
+    { value: BannerVariant.Success, label: 'Success', dot: 'bg-success' },
+    { value: BannerVariant.Warning, label: 'Warning', dot: 'bg-warning' },
+    { value: BannerVariant.Danger, label: 'Danger', dot: 'bg-destructive' },
 ];
 
-/**
- * Site banner settings. The API enforces Permissions__BannerManagementMinRole (Moderator by default) on
- * /banner/settings; the permission check here only avoids rendering a form the API would reject.
- */
 const SiteBannerSettings = () => {
     const user = useRequireAuth();
     const { canManageBanner, isLoading: permissionsLoading } = usePermissions();
@@ -38,19 +34,22 @@ const SiteBannerSettings = () => {
     const [isEnabled, setIsEnabled] = useState(false);
     const [saving, setSaving] = useState(false);
 
-    useEffect(() => {
-        if (!settingsQuery.data) return;
+    const [syncedSettings, setSyncedSettings] = useState<BannerSettings | undefined>(undefined);
+    if (settingsQuery.data && settingsQuery.data !== syncedSettings) {
+        setSyncedSettings(settingsQuery.data);
         setMessage(settingsQuery.data.message);
         setVariant(settingsQuery.data.variant);
         setIsEnabled(settingsQuery.data.isEnabled);
-    }, [settingsQuery.data]);
+    }
 
-    if (!user || permissionsLoading) return <div className="p-10 text-center">Loading...</div>;
-    if (!canManageBanner) return <div className="p-10 text-center">Access Denied</div>;
+    if (!user || permissionsLoading) return <div className="page text-center text-muted-foreground" role="status">Loading…</div>;
+    if (!canManageBanner) return <div className="page text-center text-muted-foreground">You do not have permission to manage the site banner.</div>;
 
     const saved = settingsQuery.data;
     const isDirty = !!saved && (message !== saved.message || variant !== saved.variant || isEnabled !== saved.isEnabled);
-    const canSave = isDirty && !saving && (!isEnabled || message.trim().length > 0);
+    const messageLength = [...message].length;
+    const messageTooLong = messageLength > MAX_MESSAGE_LENGTH;
+    const canSave = isDirty && !saving && !messageTooLong && (!isEnabled || message.trim().length > 0);
 
     const handleSave = async () => {
         setSaving(true);
@@ -60,89 +59,92 @@ const SiteBannerSettings = () => {
             await invalidateBanner(queryClient);
             showNotification('success', data.isEnabled ? 'Banner published.' : 'Banner saved (hidden).');
         } catch {
-            // Errors are surfaced by the global API error handler.
+            return;
         } finally {
             setSaving(false);
         }
     };
 
     return (
-        <div className="container mx-auto p-6 md:p-10 max-w-4xl">
-            <div className="flex justify-between items-center gap-4 mb-10">
+        <div className="page-narrow">
+            <div className="page-header">
                 <div>
-                    <h1 className="text-3xl font-black flex items-center gap-3 text-foreground"><Megaphone className="text-primary" size={32} /> Site Banner</h1>
-                    <p className="text-muted-foreground mt-1">Shown at the top of every page. Visitors can dismiss it; saving a change shows it again.</p>
+                    <h1 className="page-title">Site Banner</h1>
+                    <p className="page-lede">Shown at the top of every page. Visitors can dismiss it; saving a change shows it again.</p>
                 </div>
-                <button
-                    type="button"
-                    onClick={() => setIsEnabled(!isEnabled)}
-                    disabled={settingsQuery.isLoading}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${
-                        isEnabled ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-secondary text-muted-foreground'
-                    }`}
-                >
-                    {isEnabled ? <><Eye size={16} /> Visible</> : <><EyeOff size={16} /> Hidden</>}
-                </button>
             </div>
 
-            <section className="bg-card border border-border rounded-xl p-6 space-y-6">
+            <section className="panel space-y-7 p-5 sm:p-7">
                 {settingsQuery.isLoading ? (
-                    <div className="h-40 bg-muted rounded-xl animate-pulse" />
+                    <div className="h-40 animate-pulse rounded-[var(--radius-panel)] bg-sleeve" />
                 ) : (
                     <>
+                        <div className="flex items-center justify-between gap-4">
+                            <div>
+                                <p id="banner-visible-label" className="text-sm font-semibold">Show the banner</p>
+                                <p className="text-sm text-muted-foreground">{isEnabled ? 'Visible to every visitor after saving.' : 'Hidden. The message is kept for later.'}</p>
+                            </div>
+                            <button
+                                type="button"
+                                role="switch"
+                                aria-checked={isEnabled}
+                                aria-labelledby="banner-visible-label"
+                                onClick={() => setIsEnabled(!isEnabled)}
+                                className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${isEnabled ? 'bg-brand' : 'bg-input'}`}
+                            >
+                                <span className={`absolute left-0.5 top-0.5 size-6 rounded-full bg-white shadow-sm transition-transform ${isEnabled ? 'translate-x-5' : ''}`} />
+                            </button>
+                        </div>
+
                         <div>
-                            <label htmlFor="banner-message" className="block text-sm font-bold mb-2">Message</label>
+                            <label htmlFor="banner-message" className="field-label">Message</label>
                             <textarea
                                 id="banner-message"
                                 value={message}
                                 onChange={e => setMessage(e.target.value)}
-                                maxLength={MAX_MESSAGE_LENGTH}
+                                aria-invalid={messageTooLong}
+                                aria-describedby="banner-message-count"
                                 rows={3}
                                 placeholder="e.g. Scheduled maintenance tonight from 22:00 UTC."
-                                className="w-full p-3 bg-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-primary resize-y"
+                                className="input resize-y"
                             />
-                            <p className="text-xs text-muted-foreground text-right mt-1">{message.length}/{MAX_MESSAGE_LENGTH}</p>
+                            <p id="banner-message-count" className={`field-hint text-right tabular ${messageTooLong ? 'text-destructive' : ''}`}>{messageLength}/{MAX_MESSAGE_LENGTH}</p>
                         </div>
 
-                        <div>
-                            <span className="block text-sm font-bold mb-2">Style</span>
+                        <fieldset>
+                            <legend className="field-label">Style</legend>
                             <div className="flex flex-wrap gap-2">
                                 {variants.map(v => (
                                     <button
                                         key={v.value}
                                         type="button"
+                                        aria-pressed={variant === v.value}
                                         onClick={() => setVariant(v.value)}
-                                        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold border transition-colors ${
-                                            variant === v.value ? 'border-primary bg-primary/10 text-foreground' : 'border-border text-muted-foreground hover:bg-secondary'
-                                        }`}
+                                        className={`btn btn-sm border ${variant === v.value ? 'border-brand/50 bg-brand-soft text-brand-ink' : 'border-border text-muted-foreground hover:bg-secondary'}`}
                                     >
-                                        <span className={`w-2.5 h-2.5 rounded-full ${v.dot}`} /> {v.label}
+                                        <span className={`size-2.5 rounded-full ${v.dot}`} aria-hidden="true" /> {v.label}
                                     </button>
                                 ))}
                             </div>
-                        </div>
+                        </fieldset>
 
                         <div>
-                            <span className="block text-sm font-bold mb-2">Preview</span>
-                            <div className="rounded-xl overflow-hidden border border-border">
+                            <p className="field-label">Preview</p>
+                            <div className="overflow-hidden rounded-2xl border border-border">
                                 {message.trim()
                                     ? <BannerView message={message} variant={variant} onDismiss={() => {}} />
-                                    : <p className="p-4 text-sm text-muted-foreground italic">Write a message to preview the banner.</p>}
+                                    : <p className="p-4 text-sm text-muted-foreground">Write a message to preview the banner.</p>}
                             </div>
                         </div>
 
-                        <div className="flex flex-col-reverse sm:flex-row sm:items-center justify-between gap-4 pt-2">
+                        <div className="flex flex-col-reverse justify-between gap-4 border-t border-border pt-5 sm:flex-row sm:items-center">
                             <p className="text-xs text-muted-foreground">
                                 {saved?.updatedAt
-                                    ? <>Last updated {new Date(saved.updatedAt).toLocaleString()}{saved.updatedBy && <> by <span className="font-semibold">{saved.updatedBy.name}</span></>}</>
+                                    ? <>Last updated {new Date(saved.updatedAt).toLocaleString()}{saved.updatedBy && <> by <span className="font-semibold text-foreground">{saved.updatedBy.name}</span></>}</>
                                     : 'Never configured.'}
                             </p>
-                            <button
-                                onClick={handleSave}
-                                disabled={!canSave}
-                                className="flex items-center justify-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-xl font-bold hover:opacity-90 shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                <Save size={18} /> {saving ? 'Saving...' : 'Save'}
+                            <button type="button" onClick={handleSave} disabled={!canSave} className="btn btn-primary">
+                                <Save size={16} aria-hidden="true" /> {saving ? 'Saving…' : 'Save'}
                             </button>
                         </div>
                     </>

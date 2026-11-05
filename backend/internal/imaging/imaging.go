@@ -3,18 +3,20 @@ package imaging
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
 	"image/gif"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"math"
 	"sort"
 
-	_ "image/jpeg"
-	_ "image/png"
-
 	"github.com/disintegration/imaging"
+	"golang.org/x/image/vp8"
+	"golang.org/x/image/vp8l"
 	"golang.org/x/image/webp"
 )
 
@@ -24,55 +26,148 @@ type Info struct {
 	IsAnimated  bool
 	Format      string
 	Orientation int
+	DecodeBytes int64
 }
 
-func Decode(r io.Reader) (*Info, image.Image, error) {
-	data, err := io.ReadAll(io.LimitReader(r, 64<<20))
+const MaxJPEGScans = 32
+
+var (
+	ErrUnsupportedFormat = errors.New("unsupported image format")
+	ErrCorrupt           = errors.New("corrupt image")
+	ErrTooManyPixels     = errors.New("image has too many pixels")
+	ErrTooLarge          = errors.New("image file too large")
+	ErrTooComplex        = errors.New("image too complex to decode")
+)
+
+func ReadAll(r io.Reader, max int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, max+1))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
+	if int64(len(data)) > max {
+		return nil, ErrTooLarge
+	}
+	return data, nil
+}
 
-	cfg, fmtName, err := image.DecodeConfig(bytes.NewReader(data))
+func Probe(data []byte) (*Info, error) {
+	cfg, name, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
-		return nil, nil, fmt.Errorf("unsupported or corrupt image: %w", err)
+		return nil, fmt.Errorf("%w: %v", ErrCorrupt, err)
 	}
-
-	var img image.Image
-	switch fmtName {
-	case "gif":
-		g, err := gif.DecodeAll(bytes.NewReader(data))
-		if err != nil {
-			return nil, nil, err
-		}
-		if len(g.Image) == 0 {
-			return nil, nil, fmt.Errorf("corrupt gif: no frames")
-		}
-
-		img = g.Image[0]
-	case "webp":
-		img, err = webp.Decode(bytes.NewReader(data))
-		if err != nil {
-			return nil, nil, err
-		}
+	switch name {
+	case "jpeg", "png", "gif", "webp":
 	default:
-		img, err = imaging.Decode(bytes.NewReader(data))
-		if err != nil {
-			return nil, nil, err
-		}
+		return nil, ErrUnsupportedFormat
 	}
-
-	isAnimated := fmtName == "gif"
-	if fmtName == "webp" {
-		isAnimated = webpIsAnimated(data)
+	if cfg.Width <= 0 || cfg.Height <= 0 {
+		return nil, ErrCorrupt
 	}
-
-	return &Info{
+	info := &Info{
 		Width:       cfg.Width,
 		Height:      cfg.Height,
-		IsAnimated:  isAnimated,
-		Format:      fmtName,
+		Format:      name,
+		IsAnimated:  name == "gif",
 		Orientation: exifOrientation(data),
-	}, img, nil
+	}
+	px := int64(cfg.Width) * int64(cfg.Height)
+	switch name {
+	case "webp":
+		meta, err := parseWebP(data)
+		if err != nil {
+			return nil, err
+		}
+		info.IsAnimated = meta.animated
+		if meta.animated {
+			if meta.frameW <= 0 || meta.frameH <= 0 || meta.frameW > cfg.Width || meta.frameH > cfg.Height {
+				return nil, ErrCorrupt
+			}
+		} else if meta.bitstreamW != cfg.Width || meta.bitstreamH != cfg.Height {
+			return nil, ErrCorrupt
+		}
+		info.DecodeBytes = webpDecodeBytes(meta, px)
+	case "jpeg":
+		meta, err := parseJPEG(data)
+		if err != nil {
+			return nil, err
+		}
+		info.DecodeBytes = meta.decodeBytes(cfg.Width, cfg.Height)
+	case "png":
+		info.DecodeBytes = pngDecodeBytes(data, px)
+	case "gif":
+		info.DecodeBytes = px
+	}
+	return info, nil
+}
+
+func Decode(data []byte, info *Info, maxPixels int64) (image.Image, error) {
+	if maxPixels > 0 && int64(info.Width)*int64(info.Height) > maxPixels {
+		return nil, ErrTooManyPixels
+	}
+	r := bytes.NewReader(data)
+	var (
+		img image.Image
+		err error
+	)
+	switch info.Format {
+	case "gif":
+		img, err = gif.Decode(r)
+	case "webp":
+		if info.IsAnimated {
+			var frame []byte
+			frame, err = firstWebPFrame(data)
+			if err == nil {
+				img, err = webp.Decode(bytes.NewReader(frame))
+			}
+		} else {
+			img, err = webp.Decode(r)
+		}
+	case "jpeg":
+		img, err = jpeg.Decode(r)
+	case "png":
+		img, err = png.Decode(r)
+	default:
+		return nil, ErrUnsupportedFormat
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrCorrupt, err)
+	}
+	b := img.Bounds()
+	if b.Dx() <= 0 || b.Dy() <= 0 {
+		return nil, ErrCorrupt
+	}
+	return img, nil
+}
+
+func ContentType(format string) string {
+	switch format {
+	case "jpeg":
+		return "image/jpeg"
+	case "png":
+		return "image/png"
+	case "gif":
+		return "image/gif"
+	case "webp":
+		return "image/webp"
+	}
+	return "application/octet-stream"
+}
+
+func Extension(format, clientExt string) string {
+	switch format {
+	case "jpeg":
+		if clientExt == ".jpeg" || clientExt == ".jpg" {
+			return clientExt
+		}
+		return ".jpg"
+	case "png":
+		return ".png"
+	case "gif":
+		return ".gif"
+	case "webp":
+		return ".webp"
+	}
+	return ""
 }
 
 func ValidateDimensions(info *Info, minW, minH, maxW, maxH, animMinW, animMinH, animMaxW, animMaxH int) error {
@@ -236,8 +331,8 @@ func jpegOrientation(data []byte) int {
 		if size < 2 || i+size > len(data) {
 			break
 		}
-		if marker == 0xE1 && i+2+6 <= len(data) && string(data[i+2:i+2+6]) == "Exif\x00\x00" {
-			return tiffOrientation(data[i+2+6 : i+size])
+		if marker == 0xE1 && size >= 8 && string(data[i+2:i+8]) == "Exif\x00\x00" {
+			return tiffOrientation(data[i+8 : i+size])
 		}
 		i += size
 	}
@@ -249,6 +344,9 @@ func pngOrientation(data []byte) int {
 	for pos+8 <= len(data) {
 		length := int(binary.BigEndian.Uint32(data[pos : pos+4]))
 		typ := string(data[pos+4 : pos+8])
+		if length < 0 {
+			break
+		}
 		if typ == "eXIf" && pos+8+length <= len(data) {
 			return tiffOrientation(data[pos+8 : pos+8+length])
 		}
@@ -256,7 +354,7 @@ func pngOrientation(data []byte) int {
 			break
 		}
 		pos += 8 + length + 4
-		if pos > len(data) {
+		if pos > len(data) || pos < 0 {
 			break
 		}
 	}
@@ -268,6 +366,9 @@ func webpOrientation(data []byte) int {
 	for pos+8 <= len(data) {
 		typ := string(data[pos : pos+4])
 		length := int(binary.LittleEndian.Uint32(data[pos+4 : pos+8]))
+		if length < 0 {
+			break
+		}
 		if typ == "EXIF" && pos+8+length <= len(data) {
 			return tiffOrientation(data[pos+8 : pos+8+length])
 		}
@@ -277,25 +378,6 @@ func webpOrientation(data []byte) int {
 		pos += 8 + length + (length & 1)
 	}
 	return 1
-}
-
-func webpIsAnimated(data []byte) bool {
-	pos := 12
-	for pos+8 <= len(data) {
-		typ := string(data[pos : pos+4])
-		length := int(binary.LittleEndian.Uint32(data[pos+4 : pos+8]))
-		if typ == "ANIM" {
-			return true
-		}
-		if typ == "VP8 " || typ == "VP8L" {
-			return false
-		}
-		if pos+8+length+(length&1) > len(data) {
-			break
-		}
-		pos += 8 + length + (length & 1)
-	}
-	return false
 }
 
 func tiffOrientation(exif []byte) int {
@@ -312,7 +394,7 @@ func tiffOrientation(exif []byte) int {
 		return 1
 	}
 	ifdOff := int(order.Uint32(exif[4:8]))
-	if ifdOff+2 > len(exif) {
+	if ifdOff < 0 || ifdOff+2 > len(exif) {
 		return 1
 	}
 	n := int(order.Uint16(exif[ifdOff : ifdOff+2]))
@@ -322,8 +404,211 @@ func tiffOrientation(exif []byte) int {
 		typ := order.Uint16(entry[2:4])
 		count := order.Uint32(entry[4:8])
 		if tag == 0x0112 && typ == 3 && count == 1 {
-			return int(order.Uint16(entry[8:10]))
+			if o := int(order.Uint16(entry[8:10])); o >= 1 && o <= 8 {
+				return o
+			}
+			return 1
 		}
 	}
 	return 1
+}
+
+type webpChunk struct {
+	id   string
+	data []byte
+}
+
+type webpMeta struct {
+	animated               bool
+	lossless               bool
+	bitstreamW, bitstreamH int
+	frameW, frameH         int
+}
+
+func webpChunks(data []byte, start int) ([]webpChunk, error) {
+	var out []webpChunk
+	pos := start
+	for pos+8 <= len(data) {
+		id := string(data[pos : pos+4])
+		size := int64(binary.LittleEndian.Uint32(data[pos+4 : pos+8]))
+		begin := int64(pos + 8)
+		end := begin + size
+		if end > int64(len(data)) {
+			return nil, ErrCorrupt
+		}
+		out = append(out, webpChunk{id: id, data: data[begin:end]})
+		pos = int(end + size&1)
+		if len(out) > 100000 {
+			return nil, ErrCorrupt
+		}
+	}
+	return out, nil
+}
+
+func parseWebP(data []byte) (*webpMeta, error) {
+	if len(data) < 12 || string(data[0:4]) != "RIFF" || string(data[8:12]) != "WEBP" {
+		return nil, ErrCorrupt
+	}
+	chunks, err := webpChunks(data, 12)
+	if err != nil {
+		return nil, err
+	}
+	meta := &webpMeta{}
+	foundBitstream := false
+	foundFrame := false
+	for _, c := range chunks {
+		switch c.id {
+		case "ANIM":
+			meta.animated = true
+		case "ANMF":
+			if foundFrame {
+				continue
+			}
+			w, h, sub, err := parseANMF(c.data)
+			if err != nil {
+				return nil, err
+			}
+			meta.frameW, meta.frameH = w, h
+			for _, sc := range sub {
+				if sc.id == "VP8L" {
+					meta.lossless = true
+					break
+				}
+			}
+			foundFrame = true
+		case "VP8 ", "VP8L":
+			if foundBitstream {
+				continue
+			}
+			w, h, err := bitstreamDims(c.id, c.data)
+			if err != nil {
+				return nil, err
+			}
+			meta.bitstreamW, meta.bitstreamH = w, h
+			if !meta.animated {
+				meta.lossless = c.id == "VP8L"
+			}
+			foundBitstream = true
+		}
+	}
+	if meta.animated && !foundFrame {
+		return nil, ErrCorrupt
+	}
+	if !meta.animated && !foundBitstream {
+		return nil, ErrCorrupt
+	}
+	return meta, nil
+}
+
+func bitstreamDims(id string, payload []byte) (int, int, error) {
+	switch id {
+	case "VP8 ":
+		d := vp8.NewDecoder()
+		d.Init(bytes.NewReader(payload), len(payload))
+		fh, err := d.DecodeFrameHeader()
+		if err != nil {
+			return 0, 0, ErrCorrupt
+		}
+		return fh.Width, fh.Height, nil
+	case "VP8L":
+		cfg, err := vp8l.DecodeConfig(bytes.NewReader(payload))
+		if err != nil {
+			return 0, 0, ErrCorrupt
+		}
+		return cfg.Width, cfg.Height, nil
+	}
+	return 0, 0, ErrCorrupt
+}
+
+func u24(b []byte) int { return int(b[0]) | int(b[1])<<8 | int(b[2])<<16 }
+
+func parseANMF(payload []byte) (int, int, []webpChunk, error) {
+	if len(payload) < 16+8 {
+		return 0, 0, nil, ErrCorrupt
+	}
+	w := u24(payload[6:9]) + 1
+	h := u24(payload[9:12]) + 1
+	sub, err := webpChunks(payload, 16)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+	var bitstream *webpChunk
+	for i := range sub {
+		if sub[i].id == "VP8 " || sub[i].id == "VP8L" {
+			bitstream = &sub[i]
+			break
+		}
+	}
+	if bitstream == nil {
+		return 0, 0, nil, ErrCorrupt
+	}
+	bw, bh, err := bitstreamDims(bitstream.id, bitstream.data)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+	if bw != w || bh != h {
+		return 0, 0, nil, ErrCorrupt
+	}
+	return w, h, sub, nil
+}
+
+func firstWebPFrame(data []byte) ([]byte, error) {
+	chunks, err := webpChunks(data, 12)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range chunks {
+		if c.id != "ANMF" {
+			continue
+		}
+		w, h, sub, err := parseANMF(c.data)
+		if err != nil {
+			return nil, err
+		}
+		var alph, bitstream *webpChunk
+		for i := range sub {
+			switch sub[i].id {
+			case "ALPH":
+				if alph == nil {
+					alph = &sub[i]
+				}
+			case "VP8 ", "VP8L":
+				if bitstream == nil {
+					bitstream = &sub[i]
+				}
+			}
+		}
+		var body bytes.Buffer
+		body.WriteString("WEBP")
+		if alph != nil && bitstream.id == "VP8 " {
+			vp8x := make([]byte, 10)
+			vp8x[0] = 0x10
+			wm, hm := w-1, h-1
+			vp8x[4], vp8x[5], vp8x[6] = byte(wm), byte(wm>>8), byte(wm>>16)
+			vp8x[7], vp8x[8], vp8x[9] = byte(hm), byte(hm>>8), byte(hm>>16)
+			writeChunk(&body, "VP8X", vp8x)
+			writeChunk(&body, "ALPH", alph.data)
+		}
+		writeChunk(&body, bitstream.id, bitstream.data)
+
+		var out bytes.Buffer
+		out.WriteString("RIFF")
+		var size [4]byte
+		binary.LittleEndian.PutUint32(size[:], uint32(body.Len()))
+		out.Write(size[:])
+		out.Write(body.Bytes())
+		return out.Bytes(), nil
+	}
+	return nil, ErrCorrupt
+}
+
+func writeChunk(buf *bytes.Buffer, id string, payload []byte) {
+	buf.WriteString(id)
+	var size [4]byte
+	binary.LittleEndian.PutUint32(size[:], uint32(len(payload)))
+	buf.Write(size[:])
+	buf.Write(payload)
+	if len(payload)&1 == 1 {
+		buf.WriteByte(0)
+	}
 }

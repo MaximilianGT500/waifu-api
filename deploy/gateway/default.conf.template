@@ -1,0 +1,89 @@
+# Load balancer in front of the API instances (docker compose service "backend", scaled via BACKEND_REPLICAS).
+# Docker's DNS returns one address per replica; "resolve" picks up added or removed replicas without a reload.
+#
+# The gateway is the trust boundary for client addresses: entrypoint.sh turns TRUSTED_PROXIES and REAL_IP_HEADER
+# into real-IP rules (conf.d/00-client-ip.conf), so $remote_addr is the real client when the request came through
+# a trusted edge (your reverse proxy, Cloudflare) and the TCP peer otherwise. The API instances receive exactly
+# that address in X-Forwarded-For and X-Real-IP; True-Client-IP and Forwarded are dropped. CF-Connecting-IP is only
+# passed on when the gateway does not use it, so the API can warn about a missing Cloudflare configuration; the API
+# never takes the client address from it.
+
+map $http_x_forwarded_proto $forwarded_proto {
+    default $scheme;
+    https   https;
+}
+
+limit_conn_zone $binary_remote_addr zone=per_client:10m;
+
+upstream waifu_api {
+    zone waifu_api 64k;
+    resolver 127.0.0.11 valid=5s ipv6=off;
+    server backend:8080 resolve max_fails=3 fail_timeout=10s;
+    keepalive 32;
+}
+
+server {
+    listen 8080;
+    server_tokens off;
+
+    # JSON bodies of the API are at most 1 MB; only image uploads and file replacements get more (see below).
+    client_max_body_size 1m;
+    client_header_timeout 15s;
+    client_body_timeout 30s;
+    send_timeout 300s;
+
+    limit_conn per_client ${GATEWAY_MAX_CONNECTIONS_PER_CLIENT};
+    limit_conn_status 429;
+
+    # Answers of the gateway itself use the API's error format (RFC 9457 problem details).
+    error_page 413 = @payload_too_large;
+    error_page 429 = @too_many_connections;
+
+    location = /__gateway/health {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location @payload_too_large {
+        default_type application/problem+json;
+        return 413 '{"type":"https://tools.ietf.org/html/rfc9110#section-15.5.14","title":"Payload Too Large","status":413,"detail":"The request body is too large."}';
+    }
+
+    location @too_many_connections {
+        default_type application/problem+json;
+        add_header Retry-After 1 always;
+        return 429 '{"type":"https://tools.ietf.org/html/rfc6585#section-4","title":"Too Many Requests","status":429,"detail":"Too many concurrent requests from this client. Please retry later."}';
+    }
+
+    location / {
+        proxy_pass http://waifu_api;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto $forwarded_proto;
+        proxy_set_header X-Request-Id $request_id;
+        proxy_set_header CF-Connecting-IP $cf_connecting_ip_hint;
+        proxy_set_header True-Client-IP "";
+        proxy_set_header Forwarded "";
+
+        # Uploads are buffered here first, so slow clients never tie up an API instance.
+        proxy_request_buffering on;
+        proxy_connect_timeout 3s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+
+        # A replica that is restarting is skipped; non-idempotent requests are only retried if they never reached it.
+        proxy_next_upstream error timeout http_502 http_503 http_504;
+        proxy_next_upstream_tries 3;
+        proxy_next_upstream_timeout 10s;
+
+        # POST /images/upload and PATCH /images/{id} carry image files (also below API_BASE_PATH).
+        location ~ /images/(?:upload|[0-9]+)$ {
+            client_max_body_size ${GATEWAY_MAX_BODY_SIZE};
+            proxy_pass http://waifu_api;
+        }
+    }
+}

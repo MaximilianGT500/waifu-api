@@ -78,8 +78,6 @@ const config: Config = {
         docsPluginId: "classic",
         config: {
           waifuApi: {
-            // Generated at build time by Microsoft.Extensions.ApiDescription.Server
-            // The spec is output to ../openapi/{ProjectName}.json by `dotnet build`
             specPath: "../openapi/WaifuApi.Web.json",
             outputDir: "docs/api",
             sidebarOptions: {
@@ -89,9 +87,6 @@ const config: Config = {
         },
       },
     ],
-    // Webpack 5 (Docusaurus 3) no longer auto-polyfills Node core modules. The
-    // openapi theme pulls in postman-code-generators which references `path`
-    // from code that ends up in the browser bundle. Provide a browser fallback.
     function nodePolyfillPlugin() {
       return {
         name: "node-polyfill-fallbacks",

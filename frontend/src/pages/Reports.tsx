@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useEffectEvent } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 import { Report, PaginatedList, ReportStatus } from '../types';
 import { useNotification } from '../context/NotificationContext';
-import { Check, X, Trash2, Flag } from 'lucide-react';
+import { Check, X, Trash2 } from 'lucide-react';
 import ConfirmModal from '../components/modals/ConfirmModal';
 import ReasonModal from '../components/modals/ReasonModal';
 import Pagination from '../components/Pagination';
@@ -46,15 +46,18 @@ const Reports = () => {
             setReports(data.items);
             setTotalPages(data.totalPages);
         } catch {
-            // Handled globally
+            return;
         } finally {
             setLoading(false);
         }
     };
 
+    const loadReports = useEffectEvent(() => {
+        fetchReports();
+    });
+
     useEffect(() => {
-        if (user) fetchReports();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        if (user) loadReports();
     }, [page, user, statusFilter]);
 
     useEffect(() => { setPage(1); }, [statusFilter]);
@@ -69,77 +72,81 @@ const Reports = () => {
             invalidateNavBadges(queryClient);
             fetchReports();
         } catch {
-            // Handled globally
+            return;
         }
     };
 
     const handleDeleteImage = async () => {
         if (!reportToDelete) return;
         try {
-            // Deleting the image resolves its pending reports (the FK nulls their image link); they are kept.
             await api.delete(`/images/${reportToDelete.imageId}`);
             showNotification('success', 'Image deleted');
             setReportToDelete(null);
             invalidateNavBadges(queryClient);
             fetchReports();
         } catch {
-            // Handled globally
+            return;
         }
     };
 
     if (!user) return null;
 
     return (
-        <div className="container mx-auto p-6 md:p-10 h-full flex flex-col">
-            <div className="mb-6">
-                <h1 className="text-3xl font-black flex items-center gap-3 text-foreground"><Flag className="text-primary" size={32}/> Reports</h1>
-                <p className="text-muted-foreground mt-1">Review and act on reported images.</p>
+        <div className="page flex h-full flex-col">
+            <div className="page-header">
+                <div>
+                    <h1 className="page-title">Reports</h1>
+                    <p className="page-lede">Images the community flagged. Validate, dismiss or remove them.</p>
+                </div>
             </div>
 
-            <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 mb-6">
+            <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
                 <StatusTabs value={statusFilter} onChange={setStatusFilter} options={STATUS_OPTIONS} />
             </div>
 
             {loading ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {[...Array(3)].map((_, i) => <div key={i} className="h-80 bg-muted rounded-xl animate-pulse" />)}
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {[...Array(3)].map((_, i) => <div key={i} className="h-80 animate-pulse rounded-[var(--radius-panel)] bg-sleeve" />)}
                 </div>
             ) : reports.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-64 text-muted-foreground border-2 border-dashed border-border rounded-xl bg-card/30">
-                    <Check size={48} className="mb-4 opacity-20" />
-                    <p className="text-lg font-medium">All clear!</p>
-                    <p className="text-sm">No {statusFilter === 'All' ? '' : statusFilter.toLowerCase() + ' '}reports here.</p>
+                <div className="flex h-64 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-border px-6 text-center text-muted-foreground">
+                    <Check size={40} className="mb-3 opacity-30" aria-hidden="true" />
+                    <p className="font-semibold text-foreground">Nothing to review</p>
+                    <p className="mt-1 text-sm">No {statusFilter === 'All' ? '' : statusFilter.toLowerCase() + ' '}reports here.</p>
                 </div>
             ) : (
                 <div className="flex-1">
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                         {reports.map(report => (
                             <ReportCard
                                 key={report.id}
                                 report={report}
                                 showReporter
                                 footer={report.status === ReportStatus.Pending && (
-                                    <div className="p-3 border-t border-border flex gap-2 flex-wrap">
+                                    <div className="flex flex-wrap gap-2 border-t border-border p-3">
                                         <button
+                                            type="button"
                                             onClick={() => setActionTarget({ report, action: 'validate' })}
-                                            className="flex-1 min-w-[88px] py-2 bg-secondary hover:bg-green-500/10 hover:text-green-600 rounded-lg font-bold text-sm transition-colors flex items-center justify-center gap-2"
+                                            className="btn btn-soft btn-sm min-w-[5.5rem] flex-1 hover:bg-success/12 hover:text-success"
                                             title="The report is valid (keep image)"
                                         >
-                                            <Check size={16}/> Validate
+                                            <Check size={15} aria-hidden="true" /> Validate
                                         </button>
                                         <button
+                                            type="button"
                                             onClick={() => setActionTarget({ report, action: 'reject' })}
-                                            className="flex-1 min-w-[88px] py-2 bg-secondary hover:bg-amber-500/10 hover:text-amber-600 rounded-lg font-bold text-sm transition-colors flex items-center justify-center gap-2"
+                                            className="btn btn-soft btn-sm min-w-[5.5rem] flex-1 hover:bg-warning/12 hover:text-warning"
                                             title="Dismiss the report (keep image)"
                                         >
-                                            <X size={16}/> Reject
+                                            <X size={15} aria-hidden="true" /> Reject
                                         </button>
                                         <button
+                                            type="button"
                                             onClick={() => setReportToDelete(report)}
-                                            className="flex-1 min-w-[88px] py-2 bg-secondary hover:bg-red-500/10 hover:text-red-600 rounded-lg font-bold text-sm transition-colors flex items-center justify-center gap-2"
+                                            className="btn btn-soft btn-sm min-w-[5.5rem] flex-1 hover:bg-destructive/10 hover:text-destructive"
                                             title="Delete the reported image"
                                         >
-                                            <Trash2 size={16}/> Delete image
+                                            <Trash2 size={15} aria-hidden="true" /> Delete image
                                         </button>
                                     </div>
                                 )}

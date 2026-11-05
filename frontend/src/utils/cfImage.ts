@@ -1,10 +1,10 @@
-// On-the-fly image resizing for thumbnails (e.g. Cloudflare Image Resizing). See .env.example for vars.
-
 import { getEnv } from './env';
 
 const DEFAULT_CARD_WIDTH = 640;
 const DEFAULT_PREVIEW_WIDTH = 1280;
 const DEFAULT_WIDTH_PARAM = 'width';
+const CARD_WIDTHS = [240, 360, 480, 720];
+const PREVIEW_WIDTHS = [640, 960, 1280, 1920];
 
 const isLocalHost = (host: string) => host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local');
 
@@ -25,14 +25,21 @@ function resize(url: string, width: number): string {
         return url;
     }
     if (isLocalHost(u.hostname)) return url;
-    // Insert the separator between the path and `width=` so a trailing comma/slash is optional.
     const last = path.slice(-1);
     const sep = last === ',' || last === '/' ? '' : path.includes('=') ? ',' : '/';
     return `${u.origin}${path}${sep}${widthParam()}=${width}${u.pathname}`;
 }
 
-/** Grid/card thumbnails: gallery, review banners, report cards. */
+function srcSet(url: string, widths: number[], originalWidth?: number): string | undefined {
+    const usable = originalWidth ? widths.filter((w) => w < originalWidth) : widths;
+    if (usable.length === 0 || resize(url, usable[0]) === url) return undefined;
+    return usable.map((w) => `${resize(url, w)} ${w}w`).join(', ');
+}
+
 export const imgCard = (url: string) => resize(url, cardWidth());
 
-/** Larger single-image displays that aren't the detail page: home hero, edit-modal reference. */
 export const imgPreview = (url: string) => resize(url, previewWidth());
+
+export const imgCardSrcSet = (url: string, originalWidth?: number) => srcSet(url, CARD_WIDTHS, originalWidth);
+
+export const imgPreviewSrcSet = (url: string, originalWidth?: number) => srcSet(url, PREVIEW_WIDTHS, originalWidth);

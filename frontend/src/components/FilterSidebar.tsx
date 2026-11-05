@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useId } from 'react';
 import SearchableSelect, { Option } from './SearchableSelect';
 import api from '../services/api';
 import { PaginatedList, Tag, Artist, User, NsfwMode, AnimatedMode, Orientation, Role, ImageOrderBy, ReviewStatusFilter } from '../types';
@@ -29,10 +29,10 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
     const fetchedTagSlugs = useRef<Set<string>>(new Set());
     const fetchedUserIds = useRef<Set<string>>(new Set());
 
+    const idPrefix = useId();
     const [includedIdInput, setIncludedIdInput] = useState('');
     const [excludedIdInput, setExcludedIdInput] = useState('');
 
-    // Load initial data for selected items if needed, or just some defaults
     useEffect(() => {
         const loadInitialData = async () => {
             try {
@@ -58,7 +58,6 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
         loadInitialData();
     }, [isModeratorOrAdmin]);
 
-    // Load selected artists from URL that might not be in initial batch (single batch request)
     useEffect(() => {
         if (!initialLoadDone) return;
 
@@ -79,7 +78,6 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
         }
     }, [searchParams, initialArtists, initialLoadDone]);
 
-    // Load selected tags from URL that might not be in initial batch (single batch request)
     useEffect(() => {
         if (!initialLoadDone) return;
 
@@ -100,7 +98,6 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
         }
     }, [searchParams, initialTags, initialLoadDone]);
 
-    // Load selected uploader from URL that might not be in initial batch
     useEffect(() => {
         if (!initialLoadDone) return;
 
@@ -114,8 +111,8 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
             api.get<PaginatedList<User>>('/users', { params: { includedIds: [uploaderIdFromUrl] } })
                 .then(res => {
                     if (res.data.items.length > 0) {
-                        const user = res.data.items[0];
-                        setInitialUsers(prev => [...prev, { id: user.id, name: user.name } as Option]);
+                        const uploader = res.data.items[0];
+                        setInitialUsers(prev => [...prev, { id: uploader.id, name: uploader.name } as Option]);
                     }
                 })
                 .catch(() => {});
@@ -133,7 +130,6 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
     };
 
     const loadUsers = async (query: string, page: number = 1) => {
-        // Check if query is a number (ID) or string (name)
         const params: Record<string, string | number> = { pageSize: usersPageSize, page };
         if (query) {
             if (/^\d+$/.test(query)) {
@@ -157,7 +153,6 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
     const handleTagChange = (key: 'includedTags' | 'excludedTags', tag: Option, action: 'add' | 'remove') => {
         const value = tag.slug || tag.id.toString();
 
-        // Add tag to cache if not already present
         if (action === 'add' && !initialTags.some(t => t.slug === value)) {
             setInitialTags(prev => [...prev, tag]);
         }
@@ -179,7 +174,6 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
     const handleArtistChange = (key: 'includedArtists' | 'excludedArtists', artist: Option, action: 'add' | 'remove') => {
         const value = artist.id.toString();
 
-        // Add artist to cache if not already present (fixes "ID: xxx" display issue)
         if (action === 'add' && !initialArtists.some(a => a.id.toString() === value)) {
             setInitialArtists(prev => [...prev, artist]);
         }
@@ -216,9 +210,8 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
     const handleIdKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, key: 'includedIds' | 'excludedIds', input: string, setInput: (val: string) => void) => {
         if (e.key === 'Enter' && input.trim()) {
             e.preventDefault();
-            // Validate that input is an integer
             if (!/^\d+$/.test(input.trim())) {
-                return; // Or show an error/toast
+                return;
             }
             handleIdChange(key, input.trim(), 'add');
             setInput('');
@@ -227,7 +220,6 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
 
     const handleIdInputChange = (e: React.ChangeEvent<HTMLInputElement>, setInput: (val: string) => void) => {
         const val = e.target.value;
-        // Only allow digits
         if (val === '' || /^\d+$/.test(val)) {
             setInput(val);
         }
@@ -250,13 +242,8 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
     const height = searchParams.get('height') || '';
     const byteSize = searchParams.get('byteSize') || '';
 
-    // Helper to reconstruct selected options from URL params
-    // Note: This is imperfect because we might not have the full object (name) if it wasn't in the initial list
-    // Ideally, we would fetch the details for selected IDs if they are missing, but for now we fallback to displaying the ID/Slug
     const getSelectedTags = (slugs: string[]) => {
         return slugs.map(slug => {
-            // Try to find in initial list or just create a placeholder
-            // In a real app, you might want to fetch these specific tags by slug if missing
             const found = initialTags.find(t => t.slug === slug);
             return found || { id: slug, name: slug, slug: slug };
         });
@@ -300,136 +287,165 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
         { id: ReviewStatusFilter.All, name: 'All' }
     ];
 
+    const idChips = (key: 'includedIds' | 'excludedIds', ids: string[], tone: string) => ids.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-1.5">
+            {ids.map(id => (
+                <span key={id} className={`inline-flex items-center gap-1 rounded-full py-0.5 pl-2.5 pr-1 text-xs font-bold tabular ${tone}`}>
+                    #{id}
+                    <button
+                        type="button"
+                        onClick={() => handleIdChange(key, id, 'remove')}
+                        aria-label={`Remove ID ${id}`}
+                        className="grid size-5 place-items-center rounded-full transition-colors hover:bg-foreground/10"
+                    >
+                        <X size={12} aria-hidden="true" />
+                    </button>
+                </span>
+            ))}
+        </div>
+    );
+
     return (
         <aside
+            aria-label="Filters"
             className={`
-                fixed inset-y-0 right-0 z-[60] bg-card border-l border-border shadow-2xl h-full flex flex-col
-                transition-all duration-300 ease-in-out
-                ${showFilters
-                ? 'translate-x-0 w-full md:w-80 md:translate-x-0'
-                : 'translate-x-full md:translate-x-0 md:w-0 md:border-l-0 md:overflow-hidden'
-            }
-                md:relative md:z-40 md:shadow-none
+                fixed inset-0 z-60 flex flex-col bg-background transition-transform duration-300 ease-out
+                md:sticky md:inset-auto md:top-16 md:z-30 md:h-[calc(100dvh-4rem)] md:shrink-0 md:translate-x-0 md:overflow-hidden md:bg-transparent md:transition-[width] lg:top-0 lg:h-dvh
+                ${showFilters ? 'translate-x-0 md:w-[21.5rem]' : 'pointer-events-none translate-x-full md:pointer-events-auto md:w-0'}
             `}
+            inert={!showFilters || undefined}
         >
-            <div className="flex-1 p-5 overflow-y-auto space-y-6 w-full md:w-80 min-w-[20rem] scrollbar-thin pt-10 md:pt-6">
-                <SearchableSelect
-                    label="Sort By"
-                    options={sortOptions}
-                    selectedOptions={sortOptions.filter(o => o.id === orderBy)}
-                    onSelect={(o) => updateFilter('orderBy', o.id as string)}
-                    onRemove={() => {}}
-                    isMulti={false}
-                    clearable={false}
-                />
+            <div className="flex h-16 shrink-0 items-center justify-between border-b border-border px-5 md:hidden">
+                <h2 className="text-lg font-bold">Filters</h2>
+                <button
+                    type="button"
+                    onClick={() => setShowFilters(false)}
+                    aria-label="Close filters"
+                    className="grid size-10 place-items-center rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground"
+                >
+                    <X size={20} aria-hidden="true" />
+                </button>
+            </div>
 
-                <SearchableSelect
-                    label="Content Rating"
-                    options={ratingOptions}
-                    selectedOptions={ratingOptions.filter(o => o.id === isNsfw)}
-                    onSelect={(o) => updateFilter('isNsfw', o.id as string)}
-                    onRemove={() => { }}
-                    isMulti={false}
-                    clearable={false}
-                />
+            <div className="w-full flex-1 space-y-7 overflow-y-auto overscroll-contain px-5 py-6 md:my-6 md:mr-6 md:w-80 md:flex-none md:max-h-[calc(100%-3rem)] md:rounded-[var(--radius-panel)] md:bg-sleeve md:shadow-[inset_0_1px_3px_rgb(9_9_11/0.12)] md:dark:shadow-[inset_0_2px_6px_rgb(0_0_0/0.45)]">
+                <section className="space-y-4">
+                    <SearchableSelect
+                        label="Sort by"
+                        options={sortOptions}
+                        selectedOptions={sortOptions.filter(o => o.id === orderBy)}
+                        onSelect={(o) => updateFilter('orderBy', o.id as string)}
+                        onRemove={() => {}}
+                        isMulti={false}
+                        clearable={false}
+                    />
+                    <SearchableSelect
+                        label="Content rating"
+                        options={ratingOptions}
+                        selectedOptions={ratingOptions.filter(o => o.id === isNsfw)}
+                        onSelect={(o) => updateFilter('isNsfw', o.id as string)}
+                        onRemove={() => { }}
+                        isMulti={false}
+                        clearable={false}
+                    />
+                </section>
 
-                <div className="border-t border-border"></div>
-
-                <SearchableSelect
-                    label="Orientation"
-                    options={orientationOptions}
-                    selectedOptions={orientationOptions.filter(o => o.id === orientation)}
-                    onSelect={(o) => updateFilter('orientation', o.id as string)}
-                    onRemove={() => updateFilter('orientation', null)}
-                    isMulti={false}
-                />
-
-                <SearchableSelect
-                    label="Type"
-                    options={animationOptions}
-                    selectedOptions={animationOptions.filter(o => o.id === isAnimated)}
-                    onSelect={(o) => updateFilter('isAnimated', o.id as string)}
-                    onRemove={() => updateFilter('isAnimated', null)}
-                    isMulti={false}
-                />
-
-                <div className="grid grid-cols-2 gap-3">
-                    <div className="col-span-2">
-                        <label className="block text-xs font-bold uppercase text-muted-foreground mb-1">Dimensions (px)</label>
-                        <div className="flex gap-2">
+                <section className="space-y-4 border-t-2 border-dashed border-border pt-6 md:border-card">
+                    <SearchableSelect
+                        label="Orientation"
+                        options={orientationOptions}
+                        selectedOptions={orientationOptions.filter(o => o.id === orientation)}
+                        onSelect={(o) => updateFilter('orientation', o.id as string)}
+                        onRemove={() => updateFilter('orientation', null)}
+                        isMulti={false}
+                    />
+                    <SearchableSelect
+                        label="Type"
+                        options={animationOptions}
+                        selectedOptions={animationOptions.filter(o => o.id === isAnimated)}
+                        onSelect={(o) => updateFilter('isAnimated', o.id as string)}
+                        onRemove={() => updateFilter('isAnimated', null)}
+                        isMulti={false}
+                    />
+                    <fieldset>
+                        <legend className="field-label">Dimensions in pixels</legend>
+                        <div className="grid grid-cols-2 gap-2">
                             <input
-                                type="text" placeholder="Width (e.g. > 1920)"
-                                value={width} onChange={e => updateFilter('width', e.target.value)}
-                                className="w-1/2 p-2 rounded bg-secondary text-sm border-transparent focus:ring-1 focus:ring-primary outline-none"
+                                type="text"
+                                placeholder="Width, e.g. >1920"
+                                aria-label="Width"
+                                value={width}
+                                onChange={e => updateFilter('width', e.target.value)}
+                                className="input"
                             />
                             <input
-                                type="text" placeholder="Height (e.g. < 1080)"
-                                value={height} onChange={e => updateFilter('height', e.target.value)}
-                                className="w-1/2 p-2 rounded bg-secondary text-sm border-transparent focus:ring-1 focus:ring-primary outline-none"
+                                type="text"
+                                placeholder="Height, e.g. <1080"
+                                aria-label="Height"
+                                value={height}
+                                onChange={e => updateFilter('height', e.target.value)}
+                                className="input"
                             />
                         </div>
-                    </div>
-
-                    <div className="col-span-2">
-                        <label className="block text-xs font-bold uppercase text-muted-foreground mb-1">Byte Size</label>
+                    </fieldset>
+                    <div>
+                        <label htmlFor={`${idPrefix}-bytes`} className="field-label">File size in bytes</label>
                         <input
-                            type="text" placeholder="Size (e.g. < 1000000)"
-                            value={byteSize} onChange={e => updateFilter('byteSize', e.target.value)}
-                            className="w-full p-2 rounded bg-secondary text-sm border-transparent focus:ring-1 focus:ring-primary outline-none"
+                            id={`${idPrefix}-bytes`}
+                            type="text"
+                            placeholder="e.g. <1000000"
+                            value={byteSize}
+                            onChange={e => updateFilter('byteSize', e.target.value)}
+                            className="input"
                         />
                     </div>
-                </div>
+                </section>
 
-                <div className="border-t border-border"></div>
+                <section className="space-y-4 border-t-2 border-dashed border-border pt-6 md:border-card">
+                    <SearchableSelect
+                        label="Include tags"
+                        placeholder="Search tags…"
+                        loadOptions={loadTags}
+                        selectedOptions={getSelectedTags(includedTagSlugs)}
+                        onSelect={(o) => handleTagChange('includedTags', o, 'add')}
+                        onRemove={(o) => handleTagChange('includedTags', o, 'remove')}
+                        isMulti={true}
+                    />
+                    <SearchableSelect
+                        label="Exclude tags"
+                        placeholder="Search tags…"
+                        loadOptions={loadTags}
+                        selectedOptions={getSelectedTags(excludedTagSlugs)}
+                        onSelect={(o) => handleTagChange('excludedTags', o, 'add')}
+                        onRemove={(o) => handleTagChange('excludedTags', o, 'remove')}
+                        isMulti={true}
+                    />
+                </section>
 
-                <SearchableSelect
-                    label="Included Tags"
-                    placeholder="Search tags..."
-                    loadOptions={loadTags}
-                    selectedOptions={getSelectedTags(includedTagSlugs)}
-                    onSelect={(o) => handleTagChange('includedTags', o, 'add')}
-                    onRemove={(o) => handleTagChange('includedTags', o, 'remove')}
-                    isMulti={true}
-                />
-
-                <SearchableSelect
-                    label="Excluded Tags"
-                    placeholder="Exclude tags..."
-                    loadOptions={loadTags}
-                    selectedOptions={getSelectedTags(excludedTagSlugs)}
-                    onSelect={(o) => handleTagChange('excludedTags', o, 'add')}
-                    onRemove={(o) => handleTagChange('excludedTags', o, 'remove')}
-                    isMulti={true}
-                />
-
-                <div className="border-t border-border"></div>
-
-                <SearchableSelect
-                    label="Included Artists"
-                    placeholder="Search artists..."
-                    loadOptions={loadArtists}
-                    selectedOptions={getSelectedArtists(includedArtistIds)}
-                    onSelect={(o) => handleArtistChange('includedArtists', o, 'add')}
-                    onRemove={(o) => handleArtistChange('includedArtists', o, 'remove')}
-                    isMulti={true}
-                />
-
-                <SearchableSelect
-                    label="Excluded Artists"
-                    placeholder="Exclude artists..."
-                    loadOptions={loadArtists}
-                    selectedOptions={getSelectedArtists(excludedArtistIds)}
-                    onSelect={(o) => handleArtistChange('excludedArtists', o, 'add')}
-                    onRemove={(o) => handleArtistChange('excludedArtists', o, 'remove')}
-                    isMulti={true}
-                />
+                <section className="space-y-4 border-t-2 border-dashed border-border pt-6 md:border-card">
+                    <SearchableSelect
+                        label="Include artists"
+                        placeholder="Search artists…"
+                        loadOptions={loadArtists}
+                        selectedOptions={getSelectedArtists(includedArtistIds)}
+                        onSelect={(o) => handleArtistChange('includedArtists', o, 'add')}
+                        onRemove={(o) => handleArtistChange('includedArtists', o, 'remove')}
+                        isMulti={true}
+                    />
+                    <SearchableSelect
+                        label="Exclude artists"
+                        placeholder="Search artists…"
+                        loadOptions={loadArtists}
+                        selectedOptions={getSelectedArtists(excludedArtistIds)}
+                        onSelect={(o) => handleArtistChange('excludedArtists', o, 'add')}
+                        onRemove={(o) => handleArtistChange('excludedArtists', o, 'remove')}
+                        isMulti={true}
+                    />
+                </section>
 
                 {isModeratorOrAdmin && (
-                    <>
-                        <div className="border-t border-border"></div>
-
+                    <section className="space-y-4 border-t-2 border-dashed border-border pt-6 md:border-card">
                         <SearchableSelect
-                            label="Review Status"
+                            label="Review status"
                             options={reviewStatusOptions}
                             selectedOptions={reviewStatusOptions.filter(o => o.id === reviewStatus)}
                             onSelect={(o) => updateFilter('reviewStatus', o.id as string)}
@@ -437,14 +453,12 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
                             isMulti={false}
                             clearable={false}
                         />
-
                         <SearchableSelect
                             label="Uploader"
-                            placeholder="Search users by name or ID..."
+                            placeholder="Search users by name or ID…"
                             loadOptions={loadUsers}
                             selectedOptions={getSelectedUploader(uploaderId)}
                             onSelect={(o) => {
-                                // Add user to cache if not already present
                                 if (!initialUsers.some(u => u.id.toString() === o.id.toString())) {
                                     setInitialUsers(prev => [...prev, o]);
                                 }
@@ -453,54 +467,43 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
                             onRemove={() => updateFilter('uploaderId', null)}
                             isMulti={false}
                         />
-                    </>
+                    </section>
                 )}
 
-                <div className="border-t border-border"></div>
-
-                <div>
-                    <label className="block text-xs font-bold uppercase text-muted-foreground mb-1">Included IDs</label>
-                    <div className="flex flex-wrap gap-2 mb-2">
-                        {includedIds.map(id => (
-                            <span key={id} className="inline-flex items-center gap-1 px-2 py-1 bg-primary/10 text-primary rounded text-xs font-medium">
-                                {id}
-                                <button onClick={() => handleIdChange('includedIds', id, 'remove')} className="hover:text-destructive"><X size={12} /></button>
-                            </span>
-                        ))}
+                <section className="space-y-4 border-t-2 border-dashed border-border pt-6 md:border-card">
+                    <div>
+                        <label htmlFor={`${idPrefix}-included-ids`} className="field-label">Include image IDs</label>
+                        {idChips('includedIds', includedIds, 'bg-brand-soft text-brand-ink')}
+                        <input
+                            id={`${idPrefix}-included-ids`}
+                            type="text"
+                            inputMode="numeric"
+                            placeholder="Type an ID and press Enter"
+                            value={includedIdInput}
+                            onChange={e => handleIdInputChange(e, setIncludedIdInput)}
+                            onKeyDown={e => handleIdKeyDown(e, 'includedIds', includedIdInput, setIncludedIdInput)}
+                            className="input"
+                        />
                     </div>
-                    <input
-                        type="text"
-                        placeholder="Press Enter to add ID..."
-                        value={includedIdInput}
-                        onChange={e => handleIdInputChange(e, setIncludedIdInput)}
-                        onKeyDown={e => handleIdKeyDown(e, 'includedIds', includedIdInput, setIncludedIdInput)}
-                        className="w-full p-2 rounded bg-secondary text-sm border-transparent focus:ring-1 focus:ring-primary outline-none"
-                    />
-                </div>
-
-                <div>
-                    <label className="block text-xs font-bold uppercase text-muted-foreground mb-1">Excluded IDs</label>
-                    <div className="flex flex-wrap gap-2 mb-2">
-                        {excludedIds.map(id => (
-                            <span key={id} className="inline-flex items-center gap-1 px-2 py-1 bg-destructive/10 text-destructive rounded text-xs font-medium">
-                                {id}
-                                <button onClick={() => handleIdChange('excludedIds', id, 'remove')} className="hover:text-destructive"><X size={12} /></button>
-                            </span>
-                        ))}
+                    <div>
+                        <label htmlFor={`${idPrefix}-excluded-ids`} className="field-label">Exclude image IDs</label>
+                        {idChips('excludedIds', excludedIds, 'bg-destructive/10 text-destructive')}
+                        <input
+                            id={`${idPrefix}-excluded-ids`}
+                            type="text"
+                            inputMode="numeric"
+                            placeholder="Type an ID and press Enter"
+                            value={excludedIdInput}
+                            onChange={e => handleIdInputChange(e, setExcludedIdInput)}
+                            onKeyDown={e => handleIdKeyDown(e, 'excludedIds', excludedIdInput, setExcludedIdInput)}
+                            className="input"
+                        />
                     </div>
-                    <input
-                        type="text"
-                        placeholder="Press Enter to add ID..."
-                        value={excludedIdInput}
-                        onChange={e => handleIdInputChange(e, setExcludedIdInput)}
-                        onKeyDown={e => handleIdKeyDown(e, 'excludedIds', excludedIdInput, setExcludedIdInput)}
-                        className="w-full p-2 rounded bg-secondary text-sm border-transparent focus:ring-1 focus:ring-primary outline-none"
-                    />
-                </div>
+                </section>
             </div>
 
-            <div className="p-4 border-t border-border md:hidden bg-card">
-                <button onClick={() => setShowFilters(false)} className="w-full py-3 bg-primary text-primary-foreground rounded-xl font-bold">Done</button>
+            <div className="shrink-0 border-t border-border bg-background p-4 pb-[max(1rem,env(safe-area-inset-bottom))] md:hidden">
+                <button type="button" onClick={() => setShowFilters(false)} className="btn btn-primary btn-lg w-full">Done</button>
             </div>
         </aside>
     );

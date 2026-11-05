@@ -1,11 +1,12 @@
-﻿import { useState, useEffect } from 'react';
-import { Check, Plus } from 'lucide-react';
+import { useState, useEffect, useEffectEvent } from 'react';
+import { Check, Plus, Heart, Folder } from 'lucide-react';
 import api from '../../services/api';
 import { AlbumDto, ImageDto, PaginatedList } from '../../types';
 import { useNotification } from '../../context/NotificationContext';
 import { useAuth } from '../../context/AuthContext';
 import Modal from '../Modal';
 import AlbumModal, { AlbumFormData } from './AlbumModal';
+import { nowIso } from '../../utils/time';
 
 interface AlbumSelectionModalProps {
     isOpen: boolean;
@@ -28,15 +29,15 @@ const AlbumSelectionModal = ({ isOpen, onClose, image, onUpdate }: AlbumSelectio
             const { data } = await api.get<PaginatedList<AlbumDto>>('/users/me/albums', { params: { pageSize: albumPageSize }, skipGlobalErrorHandler: true });
             setUserAlbums(data.items);
             setIsAlbumsLoaded(true);
-        } catch (e) {
-            console.error("Failed to load albums", e);
+        } catch {
+            setIsAlbumsLoaded(false);
         }
     };
 
+    const loadOnOpen = useEffectEvent(() => { loadAlbums(); });
+
     useEffect(() => {
-        if (isOpen) {
-            loadAlbums();
-        }
+        if (isOpen) loadOnOpen();
     }, [isOpen]);
 
     const handleToggleAlbum = async (e: React.MouseEvent, targetAlbum: AlbumDto) => {
@@ -49,13 +50,13 @@ const AlbumSelectionModal = ({ isOpen, onClose, image, onUpdate }: AlbumSelectio
 
         try {
             let updatedImage = { ...image };
-            
+
             if (isInAlbum) {
                 await api.delete(`/users/${user.id}/albums/${targetAlbum.id}/images/${image.id}`);
                 showNotification('success', `Removed from ${targetAlbum.name}`);
-                
+
                 updatedImage.albums = image.albums?.filter(a => a.id !== targetAlbum.id) || [];
-                
+
                 if (isFavorites) {
                     updatedImage.likedAt = undefined;
                     updatedImage.favorites = Math.max(0, (updatedImage.favorites || 0) - 1);
@@ -63,11 +64,11 @@ const AlbumSelectionModal = ({ isOpen, onClose, image, onUpdate }: AlbumSelectio
             } else {
                 await api.post(`/users/${user.id}/albums/${targetAlbum.id}/images/${image.id}`);
                 showNotification('success', `Added to ${targetAlbum.name}`);
-                
+
                 updatedImage.albums = [...(image.albums || []), targetAlbum];
 
                 if (isFavorites) {
-                    updatedImage.likedAt = new Date().toISOString();
+                    updatedImage.likedAt = nowIso();
                     updatedImage.favorites = (updatedImage.favorites || 0) + 1;
                 }
             }
@@ -75,11 +76,10 @@ const AlbumSelectionModal = ({ isOpen, onClose, image, onUpdate }: AlbumSelectio
             if (onUpdate) {
                 onUpdate(updatedImage);
             }
-            
-            // Update local list to reflect changes if needed
-             setUserAlbums([...userAlbums]);
-        } catch (e) {
-            showNotification('error', `Failed to update album`);
+
+            setUserAlbums([...userAlbums]);
+        } catch {
+            showNotification('error', 'Could not update the album. Please try again.');
         }
     };
 
@@ -89,8 +89,8 @@ const AlbumSelectionModal = ({ isOpen, onClose, image, onUpdate }: AlbumSelectio
             showNotification('success', 'Album created');
             setIsCreateAlbumOpen(false);
             setUserAlbums(prev => [...prev, newAlbum]);
-        } catch { 
-            // Error handled globally
+        } catch {
+            return;
         }
     };
 
@@ -104,60 +104,62 @@ const AlbumSelectionModal = ({ isOpen, onClose, image, onUpdate }: AlbumSelectio
                 title="Add to Album"
                 maxWidth="max-w-sm"
             >
-                <div className="space-y-2">
+                <div className="space-y-3">
                     {isAlbumsLoaded ? (
                         userAlbums.length === 0 ? (
-                            <div className="text-center py-8 text-muted-foreground">
-                                <p>No albums found.</p>
-                                <button 
-                                    onClick={() => setIsCreateAlbumOpen(true)}
-                                    className="mt-4 text-primary font-bold hover:underline"
-                                >
-                                    Create your first album
+                            <div className="py-6 text-center text-muted-foreground">
+                                <p>You have no albums yet.</p>
+                                <button type="button" onClick={() => setIsCreateAlbumOpen(true)} className="btn btn-primary mt-4">
+                                    <Plus size={16} aria-hidden="true" /> Create your first album
                                 </button>
                             </div>
                         ) : (
-                            <div className="space-y-1 max-h-[60vh] overflow-y-auto -mx-2 px-2">
+                            <ul className="-mx-1 max-h-[60vh] space-y-1 overflow-y-auto px-1">
                                 {userAlbums.map(album => {
-                                    const isInAlbum = image.albums?.some(a => a.id === album.id);
+                                    const isInAlbum = !!image.albums?.some(a => a.id === album.id);
                                     return (
-                                        <div
-                                            key={album.id}
-                                            onClick={(e) => handleToggleAlbum(e, album)}
-                                            className={`flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all border ${
-                                                isInAlbum 
-                                                    ? 'bg-primary/10 border-primary/20 text-primary' 
-                                                    : 'bg-secondary/50 border-transparent hover:bg-secondary hover:border-border'
-                                            }`}
-                                        >
-                                            <span className="font-medium truncate pr-4">{album.name}</span>
-                                            {isInAlbum && <Check size={18} className="shrink-0" />}
-                                        </div>
+                                        <li key={album.id}>
+                                            <button
+                                                type="button"
+                                                aria-pressed={isInAlbum}
+                                                onClick={(e) => handleToggleAlbum(e, album)}
+                                                className={`flex w-full items-center justify-between gap-3 rounded-full px-4 py-2.5 text-left transition-colors ${
+                                                    isInAlbum ? 'bg-brand-soft text-brand-ink' : 'hover:bg-secondary'
+                                                }`}
+                                            >
+                                                <span className="flex min-w-0 items-center gap-2.5">
+                                                    {album.isDefault
+                                                        ? <Heart size={16} aria-hidden="true" className={`shrink-0 ${isInAlbum ? 'fill-current' : 'text-muted-foreground'}`} />
+                                                        : <Folder size={16} aria-hidden="true" className={`shrink-0 ${isInAlbum ? '' : 'text-muted-foreground'}`} />}
+                                                    <span className="truncate font-medium">{album.name}</span>
+                                                </span>
+                                                <span className={`grid size-5 shrink-0 place-items-center rounded-full border-[1.5px] ${isInAlbum ? 'border-transparent bg-brand text-white dark:text-zinc-950' : 'border-input'}`} aria-hidden="true">
+                                                    {isInAlbum && <Check size={13} strokeWidth={3} />}
+                                                </span>
+                                            </button>
+                                        </li>
                                     );
                                 })}
-                            </div>
+                            </ul>
                         )
                     ) : (
-                        <div className="py-8 text-center text-muted-foreground">Loading albums...</div>
+                        <div className="py-8 text-center text-muted-foreground" role="status">Loading albums…</div>
                     )}
 
                     {userAlbums.length > 0 && (
-                        <button
-                            onClick={() => setIsCreateAlbumOpen(true)}
-                            className="w-full mt-4 py-3 flex items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border hover:border-primary/50 hover:bg-secondary/50 text-muted-foreground hover:text-foreground transition-all font-medium"
-                        >
-                            <Plus size={18} /> Create New Album
+                        <button type="button" onClick={() => setIsCreateAlbumOpen(true)} className="btn btn-ghost w-full border border-dashed border-border">
+                            <Plus size={16} aria-hidden="true" /> New album
                         </button>
                     )}
                 </div>
             </Modal>
 
-            <AlbumModal 
-                isOpen={isCreateAlbumOpen} 
-                onClose={() => setIsCreateAlbumOpen(false)} 
-                onSubmit={handleCreateAlbum} 
-                title="Create New Album" 
-                submitLabel="Create" 
+            <AlbumModal
+                isOpen={isCreateAlbumOpen}
+                onClose={() => setIsCreateAlbumOpen(false)}
+                onSubmit={handleCreateAlbum}
+                title="Create New Album"
+                submitLabel="Create"
             />
         </>
     );

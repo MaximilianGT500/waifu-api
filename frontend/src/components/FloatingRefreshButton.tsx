@@ -13,8 +13,6 @@ const FloatingRefreshButton = ({ onRefresh }: FloatingRefreshButtonProps) => {
         if (!vv) return;
 
         const update = () => {
-            // The difference between layout viewport and visual viewport
-            // gives us the height of the browser's bottom toolbar
             const toolbarHeight = window.innerHeight - vv.height - vv.offsetTop;
             setBottomOffset(Math.max(24, toolbarHeight + 24));
         };
@@ -31,12 +29,14 @@ const FloatingRefreshButton = ({ onRefresh }: FloatingRefreshButtonProps) => {
 
     return (
         <button
+            type="button"
             onClick={onRefresh}
-            className="fixed right-6 z-40 p-4 rounded-full shadow-2xl transition-all hover:scale-110 active:scale-95 border border-white dark:border-zinc-900 bg-zinc-900 text-white dark:bg-white dark:text-black"
+            className="fixed right-5 z-40 grid size-12 place-items-center rounded-full bg-primary text-primary-foreground shadow-float transition-[transform,background-color] hover:bg-primary/90 active:scale-95 sm:right-6"
             style={{ bottom: `${bottomOffset}px` }}
             title="Refresh"
+            aria-label="Refresh images"
         >
-            <RefreshCw size={28} />
+            <RefreshCw size={20} aria-hidden="true" />
         </button>
     );
 };

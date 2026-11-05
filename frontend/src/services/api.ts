@@ -1,12 +1,13 @@
-﻿import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
-import { globalErrorBus } from './eventBus';
+import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
+import { authExpiredBus, globalErrorBus } from './eventBus';
 import { getEnv } from '../utils/env';
 import { ProblemDetails } from '../types';
+import { getStoredToken } from './tokenStorage';
 
-// Extend AxiosRequestConfig to include our custom property
 declare module 'axios' {
     export interface AxiosRequestConfig {
         skipGlobalErrorHandler?: boolean;
+        skipAuth?: boolean;
     }
 }
 
@@ -14,27 +15,39 @@ const api = axios.create({
     baseURL: getEnv('VITE_API_URL') || '/api',
     headers: {
         'Content-Type': 'application/json',
+        Accept: 'application/json',
     },
+    timeout: 30_000,
+    withCredentials: false,
     paramsSerializer: {
-        indexes: null, // Use repeated keys (key=1&key=2) instead of brackets (key[]=1&key[]=2)
+        indexes: null,
     },
 });
 
-// Add a request interceptor to attach the token
+const DEFAULT_TIMEOUT = 30_000;
+const UPLOAD_TIMEOUT = 10 * 60_000;
+const UNSAFE_PATH = /[?#\\]|(?:^|\/)(?:\.|%2e){1,2}(?:\/|$)/i;
+
 api.interceptors.request.use(
     (config) => {
-        const token = localStorage.getItem('token');
+        if (config.url && UNSAFE_PATH.test(config.url)) {
+            return Promise.reject(new AxiosError('Refused to call an unexpected API path', AxiosError.ERR_BAD_REQUEST, config));
+        }
+        const token = config.skipAuth ? null : getStoredToken();
         if (token) {
             config.headers.Authorization = `Bearer ${token}`;
+        }
+        if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+            config.headers.delete('Content-Type');
+            if (!config.timeout || config.timeout === DEFAULT_TIMEOUT) config.timeout = UPLOAD_TIMEOUT;
         }
         return config;
     },
     (error) => Promise.reject(error)
 );
 
-// Extract error info from an AxiosError into a message and type for toast display
 export function formatApiError(error: AxiosError<ProblemDetails>): { message: string; type: 'error' | 'warning' } {
-    let message = "An unexpected error occurred";
+    let message = 'An unexpected error occurred';
     let type: 'error' | 'warning' = 'error';
 
     if (error.response) {
@@ -52,40 +65,54 @@ export function formatApiError(error: AxiosError<ProblemDetails>): { message: st
             message = data.title;
         } else if (data?.message) {
             message = data.message;
+        } else if (status === 429) {
+            message = 'You are sending requests too quickly. Please wait a moment and try again.';
+            type = 'warning';
+        } else if (status === 403) {
+            message = 'You do not have permission to perform this action.';
         } else if (error.response.statusText) {
             message = `${status}: ${error.response.statusText}`;
         }
+    } else if (error.code === 'ECONNABORTED') {
+        message = 'The request timed out. Please try again.';
     } else if (error.request) {
-        message = "Server unreachable. Please check your internet connection.";
+        message = 'Server unreachable. Please check your internet connection.';
     }
 
+    if (message.length > 300) message = message.slice(0, 300) + '…';
     return { message, type };
 }
 
-// Show a toast notification for an API error
-export function showApiError(error: AxiosError<ProblemDetails>) {
-    const { message, type } = formatApiError(error);
+export function httpStatus(error: unknown): number | undefined {
+    return axios.isAxiosError(error) ? error.response?.status : undefined;
+}
+
+export function showApiError(error: unknown) {
+    const { message, type } = axios.isAxiosError<ProblemDetails>(error)
+        ? formatApiError(error)
+        : { message: 'An unexpected error occurred', type: 'error' as const };
     globalErrorBus.emit({ message, type });
 }
 
-// Enhanced Response Interceptor for Error Handling
 api.interceptors.response.use(
     (response) => response,
     (error: AxiosError<ProblemDetails>) => {
-        if (error.response) {
-            const { status } = error.response;
+        if (axios.isCancel(error)) {
+            return Promise.reject(error);
+        }
+        const config = error.config as (InternalAxiosRequestConfig & { skipGlobalErrorHandler?: boolean }) | undefined;
 
-            // Handle 401 Unauthorized globally
-            if (status === 401) {
-                localStorage.removeItem('token');
-                return Promise.reject(new Error("Session expired. Please login again."));
+        if (error.response?.status === 401) {
+            const current = getStoredToken();
+            if (current && config?.headers?.Authorization === `Bearer ${current}`) {
+                authExpiredBus.emit();
             }
+            error.message = 'Your session has expired. Please log in again.';
+            return Promise.reject(error);
         }
 
         const { message } = formatApiError(error);
         error.message = message;
-
-        const config = error.config as InternalAxiosRequestConfig & { skipGlobalErrorHandler?: boolean };
 
         if (!config?.skipGlobalErrorHandler) {
             showApiError(error);

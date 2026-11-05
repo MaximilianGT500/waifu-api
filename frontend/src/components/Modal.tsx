@@ -1,5 +1,6 @@
-﻿import { X } from 'lucide-react';
-import { ReactNode, useEffect } from 'react';
+import { X } from 'lucide-react';
+import { ReactNode, useEffect, useEffectEvent, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 interface ModalProps {
     isOpen: boolean;
@@ -12,48 +13,143 @@ interface ModalProps {
     zIndex?: number;
 }
 
+const FOCUSABLE = [
+    'a[href]',
+    'area[href]',
+    'button:not([disabled])',
+    'input:not([disabled]):not([type="hidden"])',
+    'select:not([disabled])',
+    'textarea:not([disabled])',
+    'iframe',
+    '[contenteditable="true"]',
+    '[tabindex]:not([tabindex="-1"])',
+].join(',');
+
+const modalStack: symbol[] = [];
+
+function focusableElements(container: HTMLElement): HTMLElement[] {
+    return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+        (el) => el.tabIndex >= 0 && el.getClientRects().length > 0 && !el.closest('[inert]')
+    );
+}
+
+function currentFocus(): HTMLElement | null {
+    const active = document.activeElement;
+    return active instanceof HTMLElement && active !== document.body ? active : null;
+}
+
 const Modal = ({ isOpen, onClose, title, children, footer, maxWidth = 'max-w-md', headerContent, zIndex = 60 }: ModalProps) => {
+    const titleId = useId();
+    const panelRef = useRef<HTMLDivElement>(null);
+    const [wasOpen, setWasOpen] = useState(isOpen);
+    const [returnFocus, setReturnFocus] = useState<HTMLElement | null>(() => (isOpen ? currentFocus() : null));
+    if (isOpen !== wasOpen) {
+        setWasOpen(isOpen);
+        if (isOpen) setReturnFocus(currentFocus());
+    }
+
+    const requestClose = useEffectEvent(() => onClose());
+
     useEffect(() => {
-        const handleEsc = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') onClose();
+        if (!isOpen) return;
+        const id = Symbol('modal');
+        modalStack.push(id);
+        const previouslyFocused = returnFocus;
+
+        const panel = panelRef.current;
+        if (panel && !panel.contains(document.activeElement)) {
+            const initial = panel.querySelector<HTMLElement>('[data-autofocus]') ?? panel;
+            initial.focus({ preventScroll: true });
+        }
+
+        const isTop = () => modalStack[modalStack.length - 1] === id;
+
+        const onKeyDown = (e: KeyboardEvent) => {
+            const current = panelRef.current;
+            if (!isTop() || !current) return;
+            if (e.key === 'Escape') {
+                e.stopPropagation();
+                requestClose();
+                return;
+            }
+            if (e.key !== 'Tab') return;
+            const items = focusableElements(current);
+            if (items.length === 0) {
+                e.preventDefault();
+                current.focus();
+                return;
+            }
+            const first = items[0];
+            const last = items[items.length - 1];
+            const active = document.activeElement;
+            if (e.shiftKey && (active === first || active === current)) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && active === last) {
+                e.preventDefault();
+                first.focus();
+            } else if (!current.contains(active)) {
+                e.preventDefault();
+                first.focus();
+            }
         };
-        if (isOpen) document.addEventListener('keydown', handleEsc);
-        return () => document.removeEventListener('keydown', handleEsc);
-    }, [isOpen, onClose]);
+        document.addEventListener('keydown', onKeyDown);
+
+        return () => {
+            document.removeEventListener('keydown', onKeyDown);
+            const index = modalStack.lastIndexOf(id);
+            if (index !== -1) modalStack.splice(index, 1);
+            if (previouslyFocused && previouslyFocused.isConnected) {
+                previouslyFocused.focus({ preventScroll: true });
+            }
+        };
+    }, [isOpen, returnFocus]);
 
     if (!isOpen) return null;
 
-    return (
-        <div className="fixed inset-0 flex items-center justify-center p-4" style={{ zIndex }}>
-            {/* Backdrop */}
+    return createPortal(
+        <div className="fixed inset-0 flex items-end justify-center sm:items-center sm:p-4" style={{ zIndex }}>
             <div
-                className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
+                className="absolute inset-0 bg-zinc-950/55 backdrop-blur-[2px] animate-in fade-in"
                 onClick={onClose}
+                aria-hidden="true"
             />
 
-            {/* Content */}
-            <div className={`relative w-full ${maxWidth} bg-card border border-border rounded-2xl shadow-2xl flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200`}>
-                <div className="flex items-center justify-between p-6 border-b border-border">
-                    <div className="flex items-center gap-3">
-                        <h3 className="text-xl font-bold">{title}</h3>
+            <div
+                ref={panelRef}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={titleId}
+                tabIndex={-1}
+                className={`relative flex max-h-[92dvh] w-full flex-col rounded-t-[var(--radius-sheet)] bg-card text-card-foreground shadow-float outline-hidden animate-in fade-in slide-in-from-bottom-4 duration-300 sm:max-h-[88vh] sm:rounded-[var(--radius-sheet)] dark:ring-1 dark:ring-white/8 ${maxWidth}`}
+            >
+                <div className="flex items-start justify-between gap-3 px-5 pb-3 pt-5 sm:px-6">
+                    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 pt-1">
+                        <h2 id={titleId} className="text-xl font-black leading-snug wrap-break-word">{title}</h2>
                         {headerContent}
                     </div>
-                    <button onClick={onClose} className="p-2 hover:bg-secondary rounded-full transition-colors">
-                        <X size={20} />
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        aria-label="Close dialog"
+                        className="-mr-1.5 grid size-9 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                    >
+                        <X size={18} aria-hidden="true" />
                     </button>
                 </div>
 
-                <div className="p-6 overflow-y-auto">
+                <div className="overflow-y-auto overscroll-contain px-5 pb-6 pt-1 sm:px-6">
                     {children}
                 </div>
 
                 {footer && (
-                    <div className="p-6 border-t border-border bg-muted/20 rounded-b-2xl">
+                    <div className="rounded-b-[var(--radius-sheet)] border-t-2 border-dashed border-border px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-6 sm:pb-4">
                         {footer}
                     </div>
                 )}
             </div>
-        </div>
+        </div>,
+        document.body
     );
 };
 

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useEffectEvent } from 'react';
 import { useImages } from '../hooks/useImages';
 import { GalleryLayout } from '../components/layout/GalleryLayout';
 import { useGalleryParams } from '../hooks/useGalleryParams';
@@ -23,8 +23,12 @@ const Gallery = () => {
         filters
     );
 
+    const checkConsent = useEffectEvent((mode: NsfwMode) => {
+        if (mode !== NsfwMode.False && !hasConsent() && !isBot()) setShowNsfwWarning(true);
+    });
+
     useEffect(() => {
-        if (isNsfw !== NsfwMode.False && !hasConsent() && !isBot()) setShowNsfwWarning(true);
+        checkConsent(isNsfw);
     }, [isNsfw]);
 
     const handleEnableNsfw = () => {

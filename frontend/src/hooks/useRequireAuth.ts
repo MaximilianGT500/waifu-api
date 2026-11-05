@@ -1,41 +1,36 @@
-﻿import { useEffect, useCallback } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useEffect, useCallback } from 'react';
+import { useNavigate, useLocation } from 'react-router';
 import { useAuth } from '../context/AuthContext';
 import { useNotification } from '../context/NotificationContext';
 
-/**
- * Hook for protecting entire pages - redirects automatically if not authenticated
- */
 export const useRequireAuth = (redirectUrl = '/login', message = 'You must be logged in to access this page.') => {
-  const { user, isLoading } = useAuth();
+  const { user, token, isLoading, sessionEndedAt } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const { showNotification } = useNotification();
 
   useEffect(() => {
-    // Only redirect if we are sure the user is not authenticated (isLoading is false)
-    if (!isLoading && !user) {
-      showNotification('warning', message);
-      // Use replace to avoid building up history stack with redirects
+    if (!isLoading && !user && !token) {
+      const justEnded = sessionEndedAt !== null && Date.now() - sessionEndedAt < 10_000;
+      if (!justEnded) showNotification('warning', message);
       navigate(redirectUrl, { state: { from: location }, replace: true });
     }
-  }, [user, isLoading, navigate, location, showNotification, redirectUrl, message]);
+  }, [user, token, isLoading, sessionEndedAt, navigate, location, showNotification, redirectUrl, message]);
 
   return user;
 };
 
-/**
- * Hook for protecting actions (buttons, etc.) - returns a function to check auth on demand
- * Usage: const checkAuth = useAuthGuard();
- *        if (!checkAuth('You must be logged in to like images.')) return;
- */
 export const useAuthGuard = () => {
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const { showNotification } = useNotification();
 
   const checkAuth = useCallback((message = 'You must be logged in to perform this action.', redirectBack?: string) => {
+    if (!user && token) {
+      showNotification('warning', 'Your account is not available right now. Please try again in a moment.');
+      return false;
+    }
     if (!user) {
       showNotification('warning', message);
       const from = redirectBack ? { pathname: redirectBack } : location;
@@ -43,7 +38,7 @@ export const useAuthGuard = () => {
       return false;
     }
     return true;
-  }, [user, navigate, location, showNotification]);
+  }, [user, token, navigate, location, showNotification]);
 
   return checkAuth;
 };

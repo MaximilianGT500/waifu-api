@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useEffectEvent } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router';
 import api from '../services/api';
 import {
     ReviewTask,
@@ -32,7 +32,10 @@ import TagChip from '../components/TagChip';
 import { StatusBadge as SharedStatusBadge, StatusTone } from '../components/StatusBadge';
 import { resolveTagsBySlugs, resolveArtistsByIds } from '../utils/metadataResolve';
 import { imgCard } from '../utils/cfImage';
+import { safeColor } from '../utils/color';
 import { invalidateNavBadges } from '../hooks/useNavBadges';
+import SafeExternalLink from '../components/ExternalLink';
+import { displayUrl } from '../utils/safeUrl';
 import {
     Check, X, ExternalLink, Image as ImageIcon, Tag as TagIcon,
     Palette, Clock, Ban, ArrowRight, Sparkles, GitPullRequest, Edit2, Link as LinkIcon,
@@ -41,8 +44,6 @@ import {
 const PAGE_SIZE = 20;
 
 const TYPE_TABS = [ReviewableContentType.Image, ReviewableContentType.Tag, ReviewableContentType.Artist] as const;
-
-// ---- helpers -------------------------------------------------------------
 
 const TARGET_LABELS: Record<ReviewableContentType, string> = {
     [ReviewableContentType.Image]: 'Image',
@@ -79,46 +80,40 @@ const StatusBadge = ({ status }: { status: ReviewTaskStatus }) => (
 
 const KindBadge = ({ kind }: { kind: ReviewTaskKind }) => (
     kind === ReviewTaskKind.NewContent ? (
-        <span className="px-2 py-1 rounded text-xs font-bold border flex items-center gap-1 bg-primary/10 text-primary border-primary/20">
-            <Sparkles size={12} /> New
+        <span className="inline-flex items-center gap-1 rounded-full bg-brand-soft px-2.5 py-0.5 text-xs font-semibold text-brand-ink">
+            <Sparkles size={11} aria-hidden="true" /> New
         </span>
     ) : (
-        <span className="px-2 py-1 rounded text-xs font-bold border flex items-center gap-1 bg-sky-500/10 text-sky-600 border-sky-500/20">
-            <GitPullRequest size={12} /> Edit
+        <span className="inline-flex items-center gap-1 rounded-full bg-info/10 px-2.5 py-0.5 text-xs font-semibold text-info">
+            <GitPullRequest size={11} aria-hidden="true" /> Edit
         </span>
     )
 );
 
-/** Shown to the submitter when a moderator changed their submission's content. */
 const ModEditedCue = ({ at }: { at?: string }) => at ? (
     <span
-        className="px-2 py-1 rounded text-xs font-bold border flex items-center gap-1 bg-amber-500/10 text-amber-600 border-amber-500/20"
+        className="inline-flex items-center gap-1 rounded-full bg-warning/12 px-2.5 py-0.5 text-xs font-semibold text-warning"
         title={`A moderator edited this submission on ${new Date(at).toLocaleString()}`}
     >
-        <Edit2 size={12} /> Edited by moderator
+        <Edit2 size={11} aria-hidden="true" /> Edited by moderator
     </span>
 ) : null;
 
-/**
- * Clickable user link, matching the Reports.tsx convention. Falls back to "User #id".
- * `plain` renders just the name (no link) — regular users can't open the /users page.
- */
 const UserLink = ({ user, id, plain }: { user?: UserMinimal; id?: number; plain?: boolean }) => {
     const label = user ? user.name : id !== undefined ? `User #${id}` : 'Unknown';
     if (plain || (!user && id === undefined)) {
         return <span className="font-medium">{label}</span>;
     }
     return (
-        <Link to={`/users?includedIds=${user ? user.id : id}`} className="hover:text-primary hover:underline font-medium">
+        <Link to={`/users?includedIds=${user ? user.id : id}`} className="font-semibold text-foreground hover:underline">
             {label}
         </Link>
     );
 };
 
-// A single old -> new scalar diff row.
 const ScalarDiff = ({ label, oldValue, newValue }: { label: string; oldValue?: string; newValue?: string }) => (
     <div className="text-sm">
-        <span className="font-bold text-muted-foreground uppercase text-xs tracking-wider">{label}</span>
+        <span className="text-xs font-semibold text-muted-foreground">{label}</span>
         <div className="flex items-center gap-2 flex-wrap mt-0.5">
             <span className="line-through text-muted-foreground break-all">{oldValue || <em>empty</em>}</span>
             <ArrowRight size={14} className="text-muted-foreground shrink-0" />
@@ -128,27 +123,31 @@ const ScalarDiff = ({ label, oldValue, newValue }: { label: string; oldValue?: s
 );
 
 const FieldLabel = ({ children }: { children: React.ReactNode }) => (
-    <span className="font-bold text-muted-foreground uppercase text-xs tracking-wider">{children}</span>
+    <span className="text-xs font-semibold text-muted-foreground">{children}</span>
 );
 
 const Unavailable = ({ label }: { label: string }) => (
-    <p className="text-sm text-muted-foreground italic">The submitted {label.toLowerCase()} is no longer available.</p>
+    <p className="text-sm text-muted-foreground">The submitted {label.toLowerCase()} is no longer available.</p>
+);
+
+const UnsafeUrl = ({ url }: { url: string }) => (
+    <span className="flex items-center gap-2 rounded-full bg-destructive/10 px-3 py-1.5 text-xs text-destructive break-all" title="Not a valid http(s) link">
+        <Ban size={14} aria-hidden="true" className="shrink-0" />
+        <span>{url}</span>
+    </span>
 );
 
 const SocialRow = ({ url }: { url: string }) => (
-    <a
+    <SafeExternalLink
         href={url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="flex items-center gap-2 bg-secondary px-2 py-1 rounded hover:bg-primary hover:text-primary-foreground transition-colors text-xs"
+        className="flex items-center gap-2 rounded-full bg-secondary px-3 py-1.5 text-xs transition-colors hover:bg-brand-soft hover:text-brand-ink"
         title={url}
+        fallback={<UnsafeUrl url={url} />}
     >
-        <LinkIcon size={14} className="text-muted-foreground shrink-0" />
-        <span className="truncate">{url.replace('https://', '')}</span>
-    </a>
+        <LinkIcon size={14} aria-hidden="true" className="text-muted-foreground shrink-0" />
+        <span className="truncate">{displayUrl(url)}</span>
+    </SafeExternalLink>
 );
-
-// ---- Edit diff (current -> proposed) -------------------------------------
 
 const EditDiff = ({ task }: { task: ReviewTask }) => {
     if (task.targetType === ReviewableContentType.Tag) {
@@ -179,8 +178,6 @@ const EditDiff = ({ task }: { task: ReviewTask }) => {
     return <ImageEditDiff task={task} />;
 };
 
-// Image edit diff. The payload only carries tag slugs / artist ids, so added entities are resolved to
-// their names via the API; every tag and artist is rendered as a link to its page.
 const ImageEditDiff = ({ task }: { task: ReviewTask }) => {
     const p = (task.payload ?? {}) as ImageEditPayload;
     const current = task.target?.image;
@@ -190,29 +187,27 @@ const ImageEditDiff = ({ task }: { task: ReviewTask }) => {
     const addArtistIds = p.addArtistIds ?? [];
     const removeArtistIds = p.removeArtistIds ?? [];
 
-    // Current membership gives full objects (id + name) for the removed entities.
     const tagBySlug = new Map((current?.tags ?? []).map(t => [t.slug, t]));
     const artistById = new Map((current?.artists ?? []).map(a => [a.id, a]));
 
-    // Added entities aren't on the target yet — resolve their names from the API.
     const [addedTags, setAddedTags] = useState<Map<string, Tag>>(new Map());
     const [addedArtists, setAddedArtists] = useState<Map<number, Artist>>(new Map());
 
     const tagKey = addTagSlugs.join(',');
     const artistKey = addArtistIds.join(',');
+    const resolveAdded = useEffectEvent(() => Promise.all([
+        resolveTagsBySlugs(addTagSlugs),
+        resolveArtistsByIds(addArtistIds),
+    ]));
+
     useEffect(() => {
         let alive = true;
-        (async () => {
-            const [tags, artists] = await Promise.all([
-                resolveTagsBySlugs(addTagSlugs),
-                resolveArtistsByIds(addArtistIds),
-            ]);
+        resolveAdded().then(([tags, artists]) => {
             if (!alive) return;
             setAddedTags(new Map(tags.map(t => [t.slug, t])));
             setAddedArtists(new Map(artists.map(a => [a.id, a])));
-        })();
+        }, () => undefined);
         return () => { alive = false; };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [tagKey, artistKey]);
 
     const hasTagChanges = addTagSlugs.length || removeTagSlugs.length;
@@ -258,8 +253,6 @@ const ImageEditDiff = ({ task }: { task: ReviewTask }) => {
     );
 };
 
-// ---- shared card chrome --------------------------------------------------
-
 interface CardActions {
     isModerator: boolean;
     isOwn: boolean;
@@ -270,9 +263,6 @@ interface CardActions {
     onCancel: () => void;
 }
 
-// Badges, target link, submitter / reviewer attribution and reason — common to every card type.
-// Moderators see (and can open) the submitter; on a user's own "My Submissions" the submitter is
-// themselves, so it's omitted and reviewers are shown as plain names (they can't open /users).
 const TaskMeta = ({ task, isModerator }: { task: ReviewTask; isModerator: boolean }) => (
     <div className="min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
@@ -282,7 +272,7 @@ const TaskMeta = ({ task, isModerator }: { task: ReviewTask; isModerator: boolea
         </div>
         <Link
             to={targetLink(task)}
-            className="mt-2 inline-flex items-center gap-1.5 text-sm font-medium hover:text-primary hover:underline"
+            className="mt-2.5 inline-flex items-center gap-1.5 text-sm font-semibold hover:underline"
         >
             {targetIcon(task.targetType)}
             {TARGET_LABELS[task.targetType]} #{task.targetId}
@@ -290,17 +280,17 @@ const TaskMeta = ({ task, isModerator }: { task: ReviewTask; isModerator: boolea
         </Link>
         <p className="text-xs text-muted-foreground mt-1">
             {isModerator ? (
-                <>By: <UserLink user={task.submitter} id={task.submitterId} />{' · '}</>
+                <>By <UserLink user={task.submitter} id={task.submitterId} />, </>
             ) : 'Submitted '}
             {new Date(task.createdAt).toLocaleDateString()}
         </p>
         {task.reviewer && (
             <p className="text-xs text-muted-foreground">
-                Reviewed by: <UserLink user={task.reviewer} id={task.reviewerId} plain={!isModerator} />
+                Reviewed by <UserLink user={task.reviewer} id={task.reviewerId} plain={!isModerator} />
             </p>
         )}
         {task.reviewerNote && (
-            <p className="text-xs text-muted-foreground mt-1 italic break-words">“{task.reviewerNote}”</p>
+            <p className="mt-2 rounded-2xl bg-secondary/70 px-3 py-2 text-xs text-muted-foreground wrap-break-word"><span className="font-semibold text-foreground">Moderator note: </span>{task.reviewerNote}</p>
         )}
     </div>
 );
@@ -311,79 +301,68 @@ const TaskFooter = ({ task, isModerator, isOwn, canEdit, onApprove, onReject, on
     const showEdit = canEdit && (isModerator || isOwn);
 
     return (
-        <div className="p-3 border-t border-border flex gap-2 flex-wrap">
+        <div className="flex flex-wrap gap-2 border-t border-border p-3">
             {isModerator && (
                 <>
-                    <button
-                        onClick={onApprove}
-                        className="flex-1 min-w-[88px] py-2 bg-secondary hover:bg-green-500/10 hover:text-green-600 rounded-lg font-bold text-sm transition-colors flex items-center justify-center gap-2"
-                    >
-                        <Check size={16} /> Approve
+                    <button type="button" onClick={onApprove} className="btn btn-soft btn-sm min-w-[5.5rem] flex-1 hover:bg-success/12 hover:text-success">
+                        <Check size={15} aria-hidden="true" /> Approve
                     </button>
-                    <button
-                        onClick={onReject}
-                        className="flex-1 min-w-[88px] py-2 bg-secondary hover:bg-red-500/10 hover:text-red-600 rounded-lg font-bold text-sm transition-colors flex items-center justify-center gap-2"
-                    >
-                        <X size={16} /> Reject
+                    <button type="button" onClick={onReject} className="btn btn-soft btn-sm min-w-[5.5rem] flex-1 hover:bg-destructive/10 hover:text-destructive">
+                        <X size={15} aria-hidden="true" /> Reject
                     </button>
                 </>
             )}
             {showEdit && (
                 <button
+                    type="button"
                     onClick={onEdit}
-                    className="flex-1 min-w-[88px] py-2 bg-secondary hover:bg-primary/10 hover:text-primary rounded-lg font-bold text-sm transition-colors flex items-center justify-center gap-2"
+                    className="btn btn-soft btn-sm min-w-[5.5rem] flex-1"
                     title={isNew ? 'Edit the submitted content' : 'Refine the proposed change'}
                 >
-                    <Edit2 size={16} /> Edit
+                    <Edit2 size={15} aria-hidden="true" /> Edit
                 </button>
             )}
             {!isModerator && isOwn && (
-                <button
-                    onClick={onCancel}
-                    className="flex-1 min-w-[88px] py-2 bg-secondary hover:bg-red-500/10 hover:text-red-600 rounded-lg font-bold text-sm transition-colors flex items-center justify-center gap-2"
-                >
-                    <Ban size={16} /> {isNew ? 'Withdraw' : 'Cancel'}
+                <button type="button" onClick={onCancel} className="btn btn-soft btn-sm min-w-[5.5rem] flex-1 hover:bg-destructive/10 hover:text-destructive">
+                    <Ban size={15} aria-hidden="true" /> {isNew ? 'Withdraw' : 'Cancel'}
                 </button>
             )}
         </div>
     );
 };
 
-// Base card: optional banner (image-forward), the common meta header, a body slot and the footer.
 const TaskCard = ({ task, actions, banner, children }: { task: ReviewTask; actions: CardActions; banner?: React.ReactNode; children: React.ReactNode }) => (
-    <div className="bg-card border border-border rounded-xl overflow-hidden flex flex-col shadow-sm">
+    <article className="panel flex flex-col overflow-hidden">
         {banner}
-        <div className="p-4 border-b border-border">
+        <div className="border-b border-border p-4">
             <TaskMeta task={task} isModerator={actions.isModerator} />
         </div>
-        <div className="p-4 space-y-3 flex-1">
+        <div className="flex-1 space-y-3 p-4">
             {task.reason && (
                 <div className="text-sm">
                     <FieldLabel>Reason</FieldLabel>
-                    <p className="mt-0.5 text-foreground whitespace-pre-wrap break-words">{task.reason}</p>
+                    <p className="mt-0.5 text-foreground whitespace-pre-wrap wrap-break-word">{task.reason}</p>
                 </div>
             )}
-            <div className="rounded-lg bg-secondary/40 border border-border p-3">
+            <div className="rounded-2xl bg-secondary/50 p-3">
                 {children}
             </div>
         </div>
         <TaskFooter task={task} {...actions} />
-    </div>
+    </article>
 );
-
-// ---- per-type cards ------------------------------------------------------
 
 const ImageTaskCard = ({ task, actions }: { task: ReviewTask; actions: CardActions }) => {
     const image = task.target?.image;
     const isNew = task.kind === ReviewTaskKind.NewContent;
 
     const banner = image ? (
-        <Link to={`/images/${task.targetId}`} className="block bg-muted">
-            <div className="w-full aspect-[16/10] overflow-hidden" style={{ backgroundColor: image.dominantColor || undefined }}>
+        <Link to={`/images/${task.targetId}`} className="group block bg-secondary">
+            <div className="aspect-16/10 w-full overflow-hidden" style={{ backgroundColor: safeColor(image.dominantColor) ?? undefined }}>
                 <img
                     src={imgCard(image.url)}
-                    alt={`Image ${task.targetId}`}
-                    className={`w-full h-full object-cover ${image.isNsfw ? 'blur-xl hover:blur-none transition-[filter] duration-300 transform-gpu' : ''}`}
+                    alt={`Submitted upload #${task.targetId}`}
+                    className={`size-full object-cover ${image.isNsfw ? 'blur-xl transition-[filter] duration-300 transform-gpu group-hover:blur-none group-focus-visible:blur-none' : ''}`}
                     loading="lazy"
                 />
             </div>
@@ -397,19 +376,23 @@ const ImageTaskCard = ({ task, actions }: { task: ReviewTask; actions: CardActio
             ) : isNew ? (
                 <div className="space-y-3">
                     <div className="flex flex-wrap gap-1.5 items-center">
-                        {image.isNsfw && <span className="px-2 py-0.5 rounded text-xs font-bold bg-destructive/10 text-destructive">NSFW</span>}
+                        {image.isNsfw && <span className="rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-semibold text-destructive">NSFW</span>}
                         {image.tags?.map(t => <TagChip key={`t-${t.id}`} href={`/tags?includedIds=${t.id}`} icon={<TagIcon size={11} />} label={t.name} />)}
                         {image.artists?.map(a => <TagChip key={`a-${a.id}`} href={`/artists?includedIds=${a.id}`} icon={<Palette size={11} />} label={a.name} />)}
                         {!image.isNsfw && !image.tags?.length && !image.artists?.length && (
-                            <span className="text-xs text-muted-foreground italic">No tags or artists</span>
+                            <span className="text-xs text-muted-foreground">No tags or artists</span>
                         )}
                     </div>
                     {image.source && (
                         <div>
                             <FieldLabel>Source</FieldLabel>
-                            <a href={image.source} target="_blank" rel="noopener noreferrer" className="block text-sm text-primary hover:underline break-all mt-0.5">
+                            <SafeExternalLink
+                                href={image.source}
+                                className="mt-0.5 block text-sm font-medium text-brand-ink break-all hover:underline"
+                                fallback={<div className="mt-0.5"><UnsafeUrl url={image.source} /></div>}
+                            >
                                 {image.source}
-                            </a>
+                            </SafeExternalLink>
                         </div>
                     )}
                 </div>
@@ -431,10 +414,10 @@ const TagTaskCard = ({ task, actions }: { task: ReviewTask; actions: CardActions
             ) : isNew ? (
                 <div className="space-y-2">
                     <div className="flex items-center gap-2 flex-wrap">
-                        <h3 className="font-bold text-base text-foreground">{tag.name}</h3>
-                        <code className="text-xs text-primary/80 bg-primary/5 px-1.5 py-0.5 rounded select-text">{tag.slug}</code>
+                        <h3 className="text-base font-bold text-foreground">{tag.name}</h3>
+                        <code className="select-text font-mono text-xs text-brand-ink">{tag.slug}</code>
                     </div>
-                    <p className="text-sm text-muted-foreground whitespace-pre-wrap break-words">{tag.description || 'No description'}</p>
+                    <p className="text-sm text-muted-foreground whitespace-pre-wrap wrap-break-word">{tag.description || 'No description'}</p>
                 </div>
             ) : (
                 <EditDiff task={task} />
@@ -463,7 +446,7 @@ const ArtistTaskCard = ({ task, actions }: { task: ReviewTask; actions: CardActi
                             {artist.patreon && <SocialRow url={artist.patreon} />}
                         </div>
                     ) : (
-                        <span className="text-xs text-muted-foreground italic">No socials</span>
+                        <span className="text-xs text-muted-foreground">No links</span>
                     )}
                 </div>
             ) : (
@@ -473,17 +456,10 @@ const ArtistTaskCard = ({ task, actions }: { task: ReviewTask; actions: CardActi
     );
 };
 
-// ---- modal initial-data builders -----------------------------------------
-// For NewContent we pre-fill the live entity; for Edit we overlay the proposed scalar values so the
-// submitter can refine their suggestion (membership stays current and is re-applied on submit).
-
 const imageInitial = (task: ReviewTask): ImageDto | undefined => {
     const image = task.target?.image;
     if (!image) return undefined;
     if (task.kind === ReviewTaskKind.NewContent) return image;
-    // Edit: overlay the proposed scalars and reconstruct the proposed tag/artist membership from the
-    // deltas, so refining the suggestion doesn't silently drop its membership changes. Added items lack
-    // friendly names here (we only have slugs/ids), but only their slug/id is used on submit.
     const p = (task.payload ?? {}) as ImageEditPayload;
     const removeTagSlugs = new Set(p.removeTagSlugs ?? []);
     const removeArtistIds = new Set(p.removeArtistIds ?? []);
@@ -523,11 +499,8 @@ const artistInitial = (task: ReviewTask): (Partial<ArtistFormData> & { id?: numb
     };
 };
 
-// Title for the content-edit modal — distinguishes editing a new submission from refining a suggestion.
 const editTitle = (task: ReviewTask) =>
-    `${task.kind === ReviewTaskKind.NewContent ? 'Edit submission' : 'Refine suggestion'} · ${TARGET_LABELS[task.targetType]} #${task.targetId}`;
-
-// ---- page ----------------------------------------------------------------
+    `${task.kind === ReviewTaskKind.NewContent ? 'Edit submission' : 'Refine suggestion'}: ${TARGET_LABELS[task.targetType]} #${task.targetId}`;
 
 const Review = () => {
     const user = useRequireAuth();
@@ -546,8 +519,6 @@ const Review = () => {
         [ReviewableContentType.Artist]: 0,
     });
 
-    // Primary navigation is the target type; status/kind are secondary filters.
-    // The initial tab can be set via ?type= (e.g. redirect here after an upload).
     const [searchParams] = useSearchParams();
     const initialType = searchParams.get('type') === ReviewableContentType.Tag
         ? ReviewableContentType.Tag
@@ -558,15 +529,12 @@ const Review = () => {
     const [statusFilter, setStatusFilter] = useState<ReviewTaskStatus>(ReviewTaskStatus.Pending);
     const [kindFilter, setKindFilter] = useState<ReviewTaskKind | 'All'>('All');
 
-    // Reject / cancel / edit modals
     const [rejectTarget, setRejectTarget] = useState<ReviewTask | null>(null);
     const [cancelTarget, setCancelTarget] = useState<ReviewTask | null>(null);
     const [editingTask, setEditingTask] = useState<ReviewTask | null>(null);
     const [editingImageData, setEditingImageData] = useState<ImageDto | undefined>(undefined);
     const queryClient = useQueryClient();
 
-    // Open the content-edit modal. For an image Edit, the payload only carries slugs/ids for proposed additions,
-    // so resolve their real names first — otherwise the modal shows raw lowercase slugs / "#id" instead of names.
     const openEditTask = async (task: ReviewTask) => {
         if (task.targetType === ReviewableContentType.Image) {
             const base = imageInitial(task);
@@ -600,13 +568,11 @@ const Review = () => {
             setTasks(data.items);
             setTotalPages(data.totalPages);
         } catch {
-            // Handled globally
         } finally {
             setLoading(false);
         }
     };
 
-    // Per-type pending counts for the tab badges (respecting the kind filter, independent of the status view).
     const fetchCounts = async () => {
         if (!user) return;
         try {
@@ -623,7 +589,6 @@ const Review = () => {
                 [ReviewableContentType.Artist]: results[2],
             });
         } catch {
-            // Best-effort; badges just stay at their previous values.
         }
     };
 
@@ -631,14 +596,20 @@ const Review = () => {
         setPage(1);
     }, [statusFilter, kindFilter, typeTab]);
 
+    const loadTasks = useEffectEvent(() => {
+        fetchTasks();
+    });
+
+    const loadCounts = useEffectEvent(() => {
+        fetchCounts();
+    });
+
     useEffect(() => {
-        if (user) fetchTasks();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        if (user) loadTasks();
     }, [page, user, statusFilter, kindFilter, typeTab]);
 
     useEffect(() => {
-        if (user) fetchCounts();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        if (user) loadCounts();
     }, [user, kindFilter]);
 
     const handleApprove = async (task: ReviewTask) => {
@@ -649,7 +620,6 @@ const Review = () => {
             fetchCounts();
             invalidateNavBadges(queryClient);
         } catch {
-            // Handled globally (e.g. 409 conflict when an edit drifted)
         }
     };
 
@@ -663,7 +633,6 @@ const Review = () => {
             fetchCounts();
             invalidateNavBadges(queryClient);
         } catch {
-            // Handled globally
         }
     };
 
@@ -677,11 +646,9 @@ const Review = () => {
             fetchCounts();
             invalidateNavBadges(queryClient);
         } catch {
-            // Handled globally
         }
     };
 
-    // Content-only edit: PATCH the task. NewContent sends the full content; Edit sends the recomputed delta.
     const patchTaskContent = async (task: ReviewTask, content: Record<string, unknown>) => {
         await api.patch(`/review/tasks/${task.id}`, { content });
         showNotification('success', task.kind === ReviewTaskKind.NewContent ? 'Submission updated' : 'Suggestion updated');
@@ -753,58 +720,44 @@ const Review = () => {
         ? `No ${statusFilter.toLowerCase()} ${TARGET_LABELS[typeTab].toLowerCase()} tasks.`
         : 'Your uploads and suggestions will appear here.';
 
+    const segment = (active: boolean) => `flex flex-1 items-center justify-center gap-2 rounded-full px-4 py-1.5 text-sm font-bold whitespace-nowrap transition-colors sm:flex-initial ${active ? 'bg-card text-foreground shadow-card' : 'text-muted-foreground hover:text-foreground'}`;
+
     return (
-        <div className="container mx-auto p-6 md:p-10">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+        <div className="page">
+            <div className="page-header">
                 <div>
-                    <h1 className="text-3xl font-black flex items-center gap-3 text-foreground">
-                        <GitPullRequest className="text-primary" size={32} />
-                        {isModerator ? 'Review queue' : 'My Submissions'}
-                    </h1>
-                    <p className="text-muted-foreground mt-1">
+                    <h1 className="page-title">{isModerator ? 'Review queue' : 'My Submissions'}</h1>
+                    <p className="page-lede">
                         {isModerator
-                            ? 'Review new submissions and proposed edits from the community.'
-                            : 'Track your uploads and suggested edits.'}
+                            ? 'New uploads and proposed edits from the community, waiting for a decision.'
+                            : 'Your uploads and suggested edits, and what the moderators decided.'}
                     </p>
                 </div>
             </div>
 
-            {/* Type, status and kind selectors — all on one level (full-width on mobile). */}
-            <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 mb-6">
-                <div className="flex bg-secondary p-1 rounded-xl">
+            <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+                <div role="group" aria-label="Content type" className="flex rounded-full bg-sleeve p-1 shadow-[inset_0_1px_2px_rgb(9_9_11/0.1)]">
                     {TYPE_TABS.map(t => (
-                        <button
-                            key={t}
-                            onClick={() => setTypeTab(t)}
-                            className={`flex-1 sm:flex-initial px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center justify-center gap-2 ${typeTab === t ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-                        >
+                        <button key={t} type="button" aria-pressed={typeTab === t} onClick={() => setTypeTab(t)} className={segment(typeTab === t)}>
                             {TARGET_LABELS[t]}s
                             {counts[t] > 0 && (
-                                <span className={`px-1.5 py-0.5 rounded-full text-[11px] font-bold leading-none ${typeTab === t ? 'bg-primary text-primary-foreground' : 'bg-primary/15 text-primary'}`}>
+                                <span className={`min-w-5 rounded-full px-1.5 py-0.5 text-center text-[0.6875rem] font-bold leading-none tabular ${typeTab === t ? 'bg-brand text-white dark:text-zinc-950' : 'bg-brand-soft text-brand-ink'}`}>
                                     {counts[t] > 99 ? '99+' : counts[t]}
                                 </span>
                             )}
                         </button>
                     ))}
                 </div>
-                <div className="flex bg-secondary p-1 rounded-xl">
+                <div role="group" aria-label="Status" className="flex rounded-full bg-sleeve p-1 shadow-[inset_0_1px_2px_rgb(9_9_11/0.1)]">
                     {[ReviewTaskStatus.Pending, ReviewTaskStatus.Approved, ReviewTaskStatus.Rejected].map(s => (
-                        <button
-                            key={s}
-                            onClick={() => setStatusFilter(s)}
-                            className={`flex-1 sm:flex-initial px-4 py-2 rounded-lg text-sm font-bold transition-all ${statusFilter === s ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-                        >
+                        <button key={s} type="button" aria-pressed={statusFilter === s} onClick={() => setStatusFilter(s)} className={segment(statusFilter === s)}>
                             {s}
                         </button>
                     ))}
                 </div>
-                <div className="flex bg-secondary p-1 rounded-xl">
+                <div role="group" aria-label="Kind of change" className="flex rounded-full bg-sleeve p-1 shadow-[inset_0_1px_2px_rgb(9_9_11/0.1)]">
                     {(['All', ReviewTaskKind.NewContent, ReviewTaskKind.Edit] as const).map(k => (
-                        <button
-                            key={k}
-                            onClick={() => setKindFilter(k)}
-                            className={`flex-1 sm:flex-initial px-4 py-2 rounded-lg text-sm font-bold transition-all ${kindFilter === k ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-                        >
+                        <button key={k} type="button" aria-pressed={kindFilter === k} onClick={() => setKindFilter(k)} className={segment(kindFilter === k)}>
                             {kindLabel(k)}
                         </button>
                     ))}
@@ -812,16 +765,16 @@ const Review = () => {
             </div>
 
             {loading ? (
-                <div className="py-20 text-center text-muted-foreground">Loading tasks...</div>
+                <div className="py-20 text-center text-muted-foreground" role="status">Loading tasks…</div>
             ) : tasks.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-64 text-muted-foreground border-2 border-dashed border-border rounded-xl bg-card/30">
-                    <Check size={48} className="mb-4 opacity-20" />
-                    <p className="text-lg font-medium">{emptyTitle}</p>
-                    <p className="text-sm">{emptySubtitle}</p>
+                <div className="flex h-64 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-border px-6 text-center text-muted-foreground">
+                    <Check size={40} className="mb-3 opacity-30" aria-hidden="true" />
+                    <p className="font-semibold text-foreground">{emptyTitle}</p>
+                    <p className="mt-1 text-sm">{emptySubtitle}</p>
                 </div>
             ) : (
                 <div>
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
                         {tasks.map(task => {
                             const isOwn = authUser?.id === task.submitterId;
                             const canEdit = !!task.target && (
@@ -874,15 +827,14 @@ const Review = () => {
                 title={cancelTarget?.kind === ReviewTaskKind.NewContent ? 'Withdraw Submission' : 'Cancel Suggestion'}
                 message={
                     cancelTarget?.kind === ReviewTaskKind.NewContent
-                        ? 'Are you sure you want to withdraw this submission? Your upload will be deleted.'
-                        : 'Are you sure you want to cancel this suggestion?'
+                        ? 'Withdraw this submission? Your upload will be deleted.'
+                        : 'Cancel this suggestion? The moderators will no longer see it.'
                 }
                 confirmText={cancelTarget?.kind === ReviewTaskKind.NewContent ? 'Withdraw' : 'Cancel Suggestion'}
                 cancelText="Keep"
                 variant="warning"
             />
 
-            {/* Content-only edit (submitter or moderator). PATCHes the task; never touches review status. */}
             {editingTask?.targetType === ReviewableContentType.Image && (
                 <ImageModal
                     isOpen={true}

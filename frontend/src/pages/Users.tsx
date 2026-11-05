@@ -2,13 +2,14 @@ import { useState } from 'react';
 import api from '../services/api';
 import { User, Role } from '../types';
 import { useNotification } from '../context/NotificationContext';
-import { Users as UsersIcon, Shield, Ban, CheckCircle, Upload, Image as ImagesIcon, Info } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Shield, Ban, CircleCheck, Upload, Image as ImagesIcon, Info } from 'lucide-react';
+import StatusBadge from '../components/StatusBadge';
+import { Link } from 'react-router';
 import ConfirmModal from '../components/modals/ConfirmModal';
 import ReasonModal from '../components/modals/ReasonModal';
 import SearchableSelect from '../components/SearchableSelect';
 import SearchInput from '../components/SearchInput';
-import Pagination from '../components/Pagination'; // Import Pagination
+import Pagination from '../components/Pagination';
 import { useResource } from '../hooks/useResource';
 import { useRequireAuth } from '../hooks/useRequireAuth';
 
@@ -40,7 +41,7 @@ const Users = () => {
             showNotification('success', 'User role updated');
             refresh();
         } catch {
-            // handled globally
+            return;
         }
     };
 
@@ -55,7 +56,7 @@ const Users = () => {
             setIsBanModalOpen(false);
             refresh();
         } catch {
-            // handled globally
+            return;
         }
     };
 
@@ -67,13 +68,13 @@ const Users = () => {
             setIsUnbanModalOpen(false);
             refresh();
         } catch {
-            // handled globally
+            return;
         }
     };
 
-    const openBanModal = (user: User) => {
-        setSelectedUser(user);
-        if (user.isBlacklisted) {
+    const openBanModal = (account: User) => {
+        setSelectedUser(account);
+        if (account.isBlacklisted) {
             setIsUnbanModalOpen(true);
         } else {
             setIsBanModalOpen(true);
@@ -89,12 +90,15 @@ const Users = () => {
 
     if (!user) return null;
 
+    const th = 'px-4 py-3 text-left text-xs font-semibold text-muted-foreground whitespace-nowrap';
+    const td = 'px-4 py-3 align-middle';
+
     return (
-        <div className="container mx-auto p-6 md:p-10">
-            <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
+        <div className="page">
+            <div className="page-header">
                 <div>
-                    <h1 className="text-3xl font-black flex items-center gap-3 text-foreground"><UsersIcon className="text-primary" size={32}/> User Management</h1>
-                    <p className="text-muted-foreground mt-1">Manage user roles and access.</p>
+                    <h1 className="page-title">User Management</h1>
+                    <p className="page-lede">Roles, bans and request counts of every account.</p>
                 </div>
 
                 <SearchInput
@@ -106,104 +110,100 @@ const Users = () => {
                 />
             </div>
 
-            <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm">
-                <div className="overflow-x-auto min-h-[400px]">
-                    <table className="w-full text-left border-collapse">
+            <div className="panel overflow-hidden">
+                <div className="min-h-[24rem] overflow-x-auto">
+                    <table className="w-full border-collapse text-left text-sm">
                         <thead>
-                        <tr className="bg-secondary/50 border-b border-border">
-                            <th className="p-4 font-bold text-sm text-muted-foreground">ID</th>
-                            <th className="p-4 font-bold text-sm text-muted-foreground">User</th>
-                            <th className="p-4 font-bold text-sm text-muted-foreground">Discord ID</th>
-                            <th className="p-4 font-bold text-sm text-muted-foreground">Uploads</th>
-                            <th className="p-4 font-bold text-sm text-muted-foreground">Albums</th>
-                            <th className="p-4 font-bold text-sm text-muted-foreground">Total Req</th>
-                            <th className="p-4 font-bold text-sm text-muted-foreground">API Key</th>
-                            <th className="p-4 font-bold text-sm text-muted-foreground">Web</th>
-                            <th className="p-4 font-bold text-sm text-muted-foreground w-48">Role</th>
-                            <th className="p-4 font-bold text-sm text-muted-foreground">Status</th>
-                            <th className="p-4 font-bold text-sm text-muted-foreground text-right">Actions</th>
+                        <tr className="border-b border-border bg-secondary/40">
+                            <th scope="col" className={th}>ID</th>
+                            <th scope="col" className={th}>User</th>
+                            <th scope="col" className={th}>Discord ID</th>
+                            <th scope="col" className={th}>Uploads</th>
+                            <th scope="col" className={th}>Album images</th>
+                            <th scope="col" className={th}>Requests</th>
+                            <th scope="col" className={th}>Via API key</th>
+                            <th scope="col" className={th}>Via web</th>
+                            <th scope="col" className={`${th} w-44`}>Role</th>
+                            <th scope="col" className={th}>Status</th>
+                            <th scope="col" className={`${th} text-right`}><span className="sr-only">Actions</span></th>
                         </tr>
                         </thead>
-                        <tbody>
+                        <tbody className="divide-y divide-border">
                         {loading ? (
-                            [...Array(5)].map((_, i) => <tr key={i}><td colSpan={11} className="p-4"><div className="h-10 bg-muted rounded animate-pulse"/></td></tr>)
-                        ) : users.map(user => (
-                            <tr key={user.id} className="border-b border-border last:border-0 hover:bg-secondary/30 transition-colors">
-                                <td className="p-4 font-mono text-sm">{user.id}</td>
-                                <td className="p-4 font-bold">{user.name}</td>
-                                <td className="p-4 font-mono text-xs text-muted-foreground">{user.discordId}</td>
-                                <td className="p-4">
-                                    <Link
-                                        to={`/gallery?uploaderId=${user.id}`}
-                                        className="inline-flex items-center gap-1.5 text-sm font-mono text-primary hover:underline"
-                                        title="View uploaded images"
-                                    >
-                                        <Upload size={14} />
-                                        {user.uploadedImageCount?.toLocaleString() || 0}
+                            <tr>
+                                <td colSpan={11} className="space-y-3 px-4 py-3">
+                                    <span className="sr-only">Loading users…</span>
+                                    {[...Array(5)].map((_, i) => <div key={i} className="h-9 animate-pulse rounded-full bg-sleeve" aria-hidden="true" />)}
+                                </td>
+                            </tr>
+                        ) : users.map(account => (
+                            <tr key={account.id} className="transition-colors hover:bg-secondary/40">
+                                <td className={`${td} tabular text-muted-foreground`}>{account.id}</td>
+                                <td className={`${td} font-semibold`}>{account.name}</td>
+                                <td className={`${td} font-mono text-xs text-muted-foreground`}>{account.discordId}</td>
+                                <td className={td}>
+                                    <Link to={`/gallery?uploaderId=${account.id}`} className="inline-flex items-center gap-1.5 font-semibold text-brand-ink tabular hover:underline" title="View uploaded images">
+                                        <Upload size={13} aria-hidden="true" />
+                                        {account.uploadedImageCount?.toLocaleString() || 0}
                                     </Link>
                                 </td>
-                                <td className="p-4">
-                                    <Link
-                                        to={`/users/${user.id}/albums`}
-                                        className="inline-flex items-center gap-1.5 text-sm font-mono text-pink-500 hover:underline"
-                                        title="View user's albums"
-                                    >
-                                        <ImagesIcon size={14} />
-                                        {user.albumImageCount?.toLocaleString() || 0}
+                                <td className={td}>
+                                    <Link to={`/users/${account.id}/albums`} className="inline-flex items-center gap-1.5 font-semibold text-brand-ink tabular hover:underline" title="View the user's albums">
+                                        <ImagesIcon size={13} aria-hidden="true" />
+                                        {account.albumImageCount?.toLocaleString() || 0}
                                     </Link>
                                 </td>
-                                <td className="p-4 font-mono text-sm">{user.requestCount?.toLocaleString() || 0}</td>
-                                <td className="p-4 font-mono text-sm text-blue-500">{user.apiKeyRequestCount?.toLocaleString() || 0}</td>
-                                <td className="p-4 font-mono text-sm text-purple-500">{user.jwtRequestCount?.toLocaleString() || 0}</td>
-                                <td className="p-4">
-                                    <div className="w-36">
+                                <td className={`${td} tabular`}>{account.requestCount?.toLocaleString() || 0}</td>
+                                <td className={`${td} tabular text-muted-foreground`}>{account.apiKeyRequestCount?.toLocaleString() || 0}</td>
+                                <td className={`${td} tabular text-muted-foreground`}>{account.jwtRequestCount?.toLocaleString() || 0}</td>
+                                <td className={td}>
+                                    <div className="w-40">
                                         <SearchableSelect
                                             options={roleOptions}
-                                            selectedOptions={roleOptions.filter(r => r.id === user.role.toString())}
-                                            onSelect={(opt) => handleRoleChange(user.id, opt.id as string)}
+                                            selectedOptions={roleOptions.filter(r => r.id === account.role.toString())}
+                                            onSelect={(opt) => handleRoleChange(account.id, opt.id as string)}
                                             onRemove={() => {}}
                                             isMulti={false}
                                             clearable={false}
-                                            placeholder="Select Role"
+                                            placeholder={`Role of ${account.name}`}
                                         />
                                     </div>
                                 </td>
-                                <td className="p-4">
-                                    {user.isBlacklisted ? (
-                                        <div className="relative">
-                                            <div className="flex items-center gap-1.5">
-                                                <span className="inline-flex items-center gap-1 bg-destructive/10 text-destructive px-2 py-1 rounded text-xs font-bold"><Ban size={12}/> Banned</span>
-                                                {user.blacklistReason && (
+                                <td className={td}>
+                                    {account.isBlacklisted ? (
+                                        <div className="max-w-56">
+                                            <div className="flex items-center gap-1">
+                                                <StatusBadge label="Banned" tone="danger" icon={<Ban size={11} aria-hidden="true" />} />
+                                                {account.blacklistReason && (
                                                     <button
-                                                        onClick={() => setReasonPopoverId(reasonPopoverId === user.id ? null : user.id)}
-                                                        className="p-1 rounded-full hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground"
-                                                        title="View reason"
+                                                        type="button"
+                                                        onClick={() => setReasonPopoverId(reasonPopoverId === account.id ? null : account.id)}
+                                                        aria-expanded={reasonPopoverId === account.id}
+                                                        className="grid size-7 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                                                        title="Show the ban reason"
+                                                        aria-label={`Ban reason for ${account.name}`}
                                                     >
-                                                        <Info size={14} />
+                                                        <Info size={14} aria-hidden="true" />
                                                     </button>
                                                 )}
                                             </div>
-                                            {reasonPopoverId === user.id && user.blacklistReason && (
-                                                <>
-                                                    <div className="fixed inset-0 z-40" onClick={() => setReasonPopoverId(null)} />
-                                                    <div className="absolute z-50 top-full left-0 mt-1 w-64 p-3 bg-card border border-border rounded-lg shadow-lg text-xs text-foreground break-words">
-                                                        <p className="font-bold text-muted-foreground mb-1">Ban reason</p>
-                                                        {user.blacklistReason}
-                                                    </div>
-                                                </>
+                                            {reasonPopoverId === account.id && account.blacklistReason && (
+                                                <p className="mt-1.5 text-xs text-muted-foreground wrap-break-word">{account.blacklistReason}</p>
                                             )}
                                         </div>
                                     ) : (
-                                        <span className="inline-flex items-center gap-1 bg-green-500/10 text-green-600 px-2 py-1 rounded text-xs font-bold"><CheckCircle size={12}/> Active</span>
+                                        <StatusBadge label="Active" tone="success" icon={<CircleCheck size={11} aria-hidden="true" />} />
                                     )}
                                 </td>
-                                <td className="p-4 text-right">
+                                <td className={`${td} text-right`}>
                                     <button
-                                        onClick={() => openBanModal(user)}
-                                        className={`p-2 rounded-lg transition-colors ${user.isBlacklisted ? 'bg-green-500/10 text-green-600 hover:bg-green-500/20' : 'bg-secondary text-red-600 hover:bg-red-500/10'}`}
-                                        title={user.isBlacklisted ? "Unban" : "Ban"}
+                                        type="button"
+                                        onClick={() => openBanModal(account)}
+                                        className={`btn btn-sm ${account.isBlacklisted ? 'btn-secondary' : 'text-destructive hover:bg-destructive/10'}`}
+                                        aria-label={account.isBlacklisted ? `Unban ${account.name}` : `Ban ${account.name}`}
                                     >
-                                        {user.isBlacklisted ? <Shield size={16} /> : <Ban size={16} />}
+                                        {account.isBlacklisted ? <Shield size={14} aria-hidden="true" /> : <Ban size={14} aria-hidden="true" />}
+                                        {account.isBlacklisted ? 'Unban' : 'Ban'}
                                     </button>
                                 </td>
                             </tr>
@@ -222,7 +222,7 @@ const Users = () => {
                 onClose={() => setIsBanModalOpen(false)}
                 onSubmit={handleBan}
                 title="Ban User"
-                description={`Are you sure you want to ban ${selectedUser?.name}? You can optionally provide a reason.`}
+                description={`Ban ${selectedUser?.name}? The account loses access to the site and the API. The reason is shown to the user.`}
                 placeholder="Reason for banning (optional)..."
                 submitText="Ban"
                 required={false}
@@ -234,7 +234,7 @@ const Users = () => {
                 onClose={() => setIsUnbanModalOpen(false)}
                 onConfirm={handleUnban}
                 title="Unban User"
-                message={<>Are you sure you want to unban <strong>{selectedUser?.name}</strong>?</>}
+                message={<p>Unban <strong className="text-foreground">{selectedUser?.name}</strong>? The account can log in and use the API again.</p>}
                 confirmText="Unban"
                 variant="warning"
             />

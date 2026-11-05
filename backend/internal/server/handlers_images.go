@@ -1,12 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"image"
-	"io"
+	"math"
 	"math/bits"
+	"mime/multipart"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -14,7 +15,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/waifu-im/waifu-api/backend/internal/auth"
 	"github.com/waifu-im/waifu-api/backend/internal/imaging"
 )
@@ -22,67 +22,25 @@ import (
 func (s *Server) RegisterImageRoutes() {
 	s.Handle("GET /images", http.HandlerFunc(s.handleListImages))
 	s.Handle("GET /images/{id}", http.HandlerFunc(s.handleGetImage))
-	s.Handle("POST /images/upload", s.RequireAuth(http.HandlerFunc(s.handleUploadImage)))
+	s.Handle("POST /images/upload", s.RequireAuth(s.withLimit(s.uploadLimiter, http.HandlerFunc(s.handleUploadImage))))
 	s.Handle("PATCH /images/{id}", s.RequireRole("Moderator")(http.HandlerFunc(s.handlePatchImage)))
 	s.Handle("DELETE /images/{id}", s.RequireRole("Admin")(http.HandlerFunc(s.handleDeleteImage)))
 }
 
-func isModerator(ident *auth.Identity) bool {
-	return ident != nil && ident.Role >= auth.RoleModerator
-}
-
-func isAdmin(ident *auth.Identity) bool {
-	return ident != nil && ident.Role >= auth.RoleAdmin
-}
-
-func reverseByte(b byte) byte {
-	var r byte
-	for i := 0; i < 8; i++ {
-		r = r<<1 | (b & 1)
-		b >>= 1
-	}
-	return r
-}
-
-func reverseBytesPerByte(v uint64) uint64 {
-	var out uint64
-	for i := 0; i < 8; i++ {
-		out = out<<8 | uint64(reverseByte(byte(v>>(8*i))))
-	}
-	return out
-}
-
-func bitsToHex(b pgtype.Bits) string {
-	var v uint64
-	for i := len(b.Bytes) - 1; i >= 0; i-- {
-		v = v<<8 | uint64(b.Bytes[i])
-	}
-	return fmt.Sprintf("%016x", reverseBytesPerByte(v))
-}
-
-func hexToBits(hex string) pgtype.Bits {
-	var v uint64
-	_, _ = fmt.Sscanf(hex, "%x", &v)
-	v = reverseBytesPerByte(v)
-	bytes := make([]byte, 8)
-	for i := 0; i < 8; i++ {
-		bytes[i] = byte(v)
-		v >>= 8
-	}
-	return pgtype.Bits{Bytes: bytes, Len: 64, Valid: true}
-}
-
-func storedHash(hash uint64) uint64 {
-	v := reverseBytesPerByte(hash)
-	var out uint64
-	for i := 0; i < 8; i++ {
-		out = out<<8 | uint64(byte(v>>(8*i)))
-	}
-	return out
-}
+const duplicateDistance = 4
 
 func hammingDistance(a, b uint64) int {
 	return bits.OnesCount64(a ^ b)
+}
+
+type sqlArgs struct {
+	args   []any
+	offset int
+}
+
+func (a *sqlArgs) add(v any) string {
+	a.args = append(a.args, v)
+	return "$" + strconv.Itoa(len(a.args)+a.offset)
 }
 
 type imageFilter struct {
@@ -104,469 +62,412 @@ type imageFilter struct {
 	excludedIDs              []int64
 }
 
-type enumProblem struct {
-	field string
-	value string
-}
+func (s *Server) parseImageFilters(r *http.Request, ident *auth.Identity) (*imageFilter, error) {
+	f := &imageFilter{reviewStatus: "Accepted"}
 
-func parseImageFilters(r *http.Request, ident *auth.Identity) (*imageFilter, []enumProblem) {
-	q := r.URL.Query()
-	f := &imageFilter{
-		reviewStatus: "Accepted",
-	}
-	var problems []enumProblem
-
-	if v := q.Get("isNsfw"); v != "" {
-		if f.isNsfw, _ = enumValue(v, "False", "True", "All"); f.isNsfw == "" {
-			problems = append(problems, enumProblem{"isNsfw", v})
+	enum := func(key, def string, allowed ...string) (string, error) {
+		v := queryGet(r, key)
+		if v == "" {
+			return def, nil
 		}
-	} else {
-		f.isNsfw = "False"
-	}
-	if v := q.Get("isAnimated"); v != "" {
-		if f.isAnimated, _ = enumValue(v, "All", "True", "False"); f.isAnimated == "" {
-			problems = append(problems, enumProblem{"isAnimated", v})
+		val, ok := enumValue(v, allowed...)
+		if !ok {
+			if runeLen(v) > 64 {
+				v = string([]rune(v)[:64]) + "…"
+			}
+			return "", errFieldValidation(key, fmt.Sprintf("The value '%s' is not valid for %s.", v, key))
 		}
-	} else {
-		f.isAnimated = "All"
+		return val, nil
 	}
-	if v := q.Get("orderBy"); v != "" {
-		if f.orderBy, _ = enumValue(v, "Random", "UploadedAt", "Favorites", "AddedToAlbum"); f.orderBy == "" {
-			problems = append(problems, enumProblem{"orderBy", v})
-		}
-	} else {
-		f.orderBy = "Random"
+	var err error
+	if f.isNsfw, err = enum("isNsfw", "False", "False", "True", "All"); err != nil {
+		return nil, err
 	}
-	if v := q.Get("orientation"); v != "" {
-		if f.orientation, _ = enumValue(v, "All", "Landscape", "Portrait", "Square"); f.orientation == "" {
-			problems = append(problems, enumProblem{"orientation", v})
-		}
-	} else {
-		f.orientation = "All"
+	if f.isAnimated, err = enum("isAnimated", "All", "All", "True", "False"); err != nil {
+		return nil, err
 	}
-	if v := q.Get("reviewStatus"); v != "" {
-		if f.reviewStatus, _ = enumValue(v, "Accepted", "Pending", "All"); f.reviewStatus == "" {
-			problems = append(problems, enumProblem{"reviewStatus", v})
-		}
+	if f.orderBy, err = enum("orderBy", "Random", "Random", "UploadedAt", "Favorites", "AddedToAlbum"); err != nil {
+		return nil, err
 	}
-	if v := q.Get("childrenReviewStatus"); v != "" {
-		if f.childrenReviewStatus, _ = enumValue(v, "Accepted", "Pending", "All"); f.childrenReviewStatus == "" {
-			problems = append(problems, enumProblem{"childrenReviewStatus", v})
-		}
-	} else {
-		f.childrenReviewStatus = "Accepted"
+	if f.orientation, err = enum("orientation", "All", "All", "Landscape", "Portrait", "Square"); err != nil {
+		return nil, err
+	}
+	if f.reviewStatus, err = enum("reviewStatus", "Accepted", "Accepted", "Pending", "All"); err != nil {
+		return nil, err
+	}
+	if f.childrenReviewStatus, err = enum("childrenReviewStatus", "Accepted", "Accepted", "Pending", "All"); err != nil {
+		return nil, err
 	}
 
 	f.includeMyPending = queryBool(r, "includeMyPending", false)
 	f.includeMyPendingChildren = queryBool(r, "includeMyPendingChildren", false)
 
-	f.width = q.Get("width")
-	f.height = q.Get("height")
-	f.byteSize = q.Get("byteSize")
+	f.width = strings.TrimSpace(queryGet(r, "width"))
+	f.height = strings.TrimSpace(queryGet(r, "height"))
+	f.byteSize = strings.TrimSpace(queryGet(r, "byteSize"))
 
-	for _, t := range repeatedQuery(r, "includedTags") {
-		f.includedTags = append(f.includedTags, strings.ToLower(strings.TrimSpace(t)))
+	toBad := func(err error) error { return errBadRequest(err.Error()) }
+	if f.includedTags, err = s.listParam(r, "includedTags", true); err != nil {
+		return nil, toBad(err)
 	}
-	for _, t := range repeatedQuery(r, "excludedTags") {
-		f.excludedTags = append(f.excludedTags, strings.ToLower(strings.TrimSpace(t)))
+	if f.excludedTags, err = s.listParam(r, "excludedTags", true); err != nil {
+		return nil, toBad(err)
 	}
-	for _, a := range repeatedQuery(r, "includedArtists") {
-		f.includedArtists = append(f.includedArtists, strings.ToLower(strings.TrimSpace(a)))
+	if f.includedArtists, err = s.listParam(r, "includedArtists", true); err != nil {
+		return nil, toBad(err)
 	}
-	for _, a := range repeatedQuery(r, "excludedArtists") {
-		f.excludedArtists = append(f.excludedArtists, strings.ToLower(strings.TrimSpace(a)))
+	if f.excludedArtists, err = s.listParam(r, "excludedArtists", true); err != nil {
+		return nil, toBad(err)
 	}
-	for _, v := range repeatedQuery(r, "includedIds") {
-		if n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil {
-			f.includedIDs = append(f.includedIDs, n)
+	if f.includedIDs, err = s.idListParam(r, "includedIds"); err != nil {
+		return nil, toBad(err)
+	}
+	if f.excludedIDs, err = s.idListParam(r, "excludedIds"); err != nil {
+		return nil, toBad(err)
+	}
+
+	if up := queryGet(r, "uploaderId"); up != "" && isModerator(ident) {
+		if n, err := strconv.ParseInt(strings.TrimSpace(up), 10, 64); err == nil {
+			f.uploaderID = &n
 		}
 	}
-	for _, v := range repeatedQuery(r, "excludedIds") {
-		if n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil {
-			f.excludedIDs = append(f.excludedIDs, n)
-		}
-	}
-
-	if up := q.Get("uploaderId"); up != "" {
-		if isModerator(ident) {
-			if n, err := strconv.ParseInt(up, 10, 64); err == nil {
-				f.uploaderID = &n
-			}
-		}
-
-	}
-
-	return f, problems
+	return f, nil
 }
 
-func buildImageWhere(f *imageFilter, ident *auth.Identity, albumID *int64, argOffset int) (string, []any) {
+func splitIDsAndNames(values []string) ([]int64, []string) {
+	var ids []int64
+	var names []string
+	for _, v := range values {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			ids = append(ids, n)
+		} else {
+			names = append(names, v)
+		}
+	}
+	return ids, names
+}
+
+type resolvedImageFilter struct {
+	f           *imageFilter
+	tagIDs      []int64
+	exTagIDs    []int64
+	artistSets  [][]int64
+	exArtistIDs []int64
+	impossible  bool
+}
+
+func (f *imageFilter) needsResolution() bool {
+	for _, list := range [][]string{f.includedTags, f.excludedTags, f.includedArtists, f.excludedArtists} {
+		if _, names := splitIDsAndNames(list); len(names) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func appendUnique(dst []int64, vals ...int64) []int64 {
+	for _, v := range vals {
+		dup := false
+		for _, d := range dst {
+			if d == v {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			dst = append(dst, v)
+		}
+	}
+	return dst
+}
+
+func (s *Server) resolveImageFilter(ctx context.Context, f *imageFilter) (*resolvedImageFilter, error) {
+	rf := &resolvedImageFilter{f: f}
+	tagIDs, tagSlugs := splitIDsAndNames(f.includedTags)
+	exTagIDs, exTagSlugs := splitIDsAndNames(f.excludedTags)
+	artistIDs, artistNames := splitIDsAndNames(f.includedArtists)
+	exArtistIDs, exArtistNames := splitIDsAndNames(f.excludedArtists)
+
+	slugs := append(append([]string{}, tagSlugs...), exTagSlugs...)
+	names := append(append([]string{}, artistNames...), exArtistNames...)
+	slugIDs := map[string]int64{}
+	nameIDs := map[string][]int64{}
+	if len(slugs) > 0 || len(names) > 0 {
+		b := &pgx.Batch{}
+		if len(slugs) > 0 {
+			b.Queue(`SELECT "Id", "Slug" FROM "Tags" WHERE "Slug" = ANY($1)`, slugs).Query(func(rows pgx.Rows) error {
+				for rows.Next() {
+					var id int64
+					var slug string
+					if err := rows.Scan(&id, &slug); err != nil {
+						return err
+					}
+					slugIDs[slug] = id
+				}
+				return rows.Err()
+			})
+		}
+		if len(names) > 0 {
+			b.Queue(`SELECT "Id", lower("Name") FROM "Artists" WHERE lower("Name") = ANY($1) ORDER BY "Id"`, names).Query(func(rows pgx.Rows) error {
+				for rows.Next() {
+					var id int64
+					var name string
+					if err := rows.Scan(&id, &name); err != nil {
+						return err
+					}
+					nameIDs[name] = append(nameIDs[name], id)
+				}
+				return rows.Err()
+			})
+		}
+		if err := s.db.SendBatch(ctx, b).Close(); err != nil {
+			return nil, err
+		}
+	}
+
+	rf.tagIDs = appendUnique(nil, tagIDs...)
+	for _, slug := range tagSlugs {
+		id, ok := slugIDs[slug]
+		if !ok {
+			rf.impossible = true
+			continue
+		}
+		rf.tagIDs = appendUnique(rf.tagIDs, id)
+	}
+	rf.exTagIDs = appendUnique(nil, exTagIDs...)
+	for _, slug := range exTagSlugs {
+		if id, ok := slugIDs[slug]; ok {
+			rf.exTagIDs = appendUnique(rf.exTagIDs, id)
+		}
+	}
+	for _, id := range artistIDs {
+		rf.artistSets = append(rf.artistSets, []int64{id})
+	}
+	for _, name := range artistNames {
+		ids := nameIDs[name]
+		if len(ids) == 0 {
+			rf.impossible = true
+			continue
+		}
+		rf.artistSets = append(rf.artistSets, ids)
+	}
+	rf.exArtistIDs = appendUnique(nil, exArtistIDs...)
+	for _, name := range exArtistNames {
+		rf.exArtistIDs = appendUnique(rf.exArtistIDs, nameIDs[name]...)
+	}
+	return rf, nil
+}
+
+func buildResolvedImageConds(rf *resolvedImageFilter, ident *auth.Identity, albumID *int64, argOffset int) (string, []any) {
+	f := rf.f
 	var conds []string
-	args := []any{}
-	ph := func() string { return fmt.Sprintf("$%d", len(args)+1+argOffset) }
-	add := func(cond string, a ...any) {
-		conds = append(conds, cond)
-		args = append(args, a...)
+	a := &sqlArgs{offset: argOffset}
+
+	if rf.impossible {
+		return "FALSE", nil
 	}
 
 	if albumID != nil {
-
 		switch f.reviewStatus {
 		case "Pending":
-			add(`i."ReviewStatus" = 0`)
+			conds = append(conds, `i."ReviewStatus" = 0`)
 		case "Accepted":
-			add(`i."ReviewStatus" = 1`)
+			conds = append(conds, `i."ReviewStatus" = 1`)
 		}
 	} else {
 		switch f.reviewStatus {
 		case "All":
-
 		case "Pending":
-			add(`i."ReviewStatus" = 0`)
+			conds = append(conds, `i."ReviewStatus" = 0`)
 		default:
 			if f.includeMyPending && ident != nil {
-				add(fmt.Sprintf(`(i."ReviewStatus" = 1 OR (i."ReviewStatus" = 0 AND i."UploaderId" = %s))`, ph()), ident.UserID)
+				conds = append(conds, fmt.Sprintf(`(i."ReviewStatus" = 1 OR (i."ReviewStatus" = 0 AND i."UploaderId" = %s))`, a.add(ident.UserID)))
 			} else {
-				add(`i."ReviewStatus" = 1`)
+				conds = append(conds, `i."ReviewStatus" = 1`)
 			}
 		}
 	}
 
 	switch f.isNsfw {
 	case "True":
-		add(`i."IsNsfw"`)
+		conds = append(conds, `i."IsNsfw"`)
 	case "False":
-		add(`NOT i."IsNsfw"`)
+		conds = append(conds, `NOT i."IsNsfw"`)
 	}
 	switch f.isAnimated {
 	case "True":
-		add(`i."IsAnimated"`)
+		conds = append(conds, `i."IsAnimated"`)
 	case "False":
-		add(`NOT i."IsAnimated"`)
+		conds = append(conds, `NOT i."IsAnimated"`)
 	}
 	switch f.orientation {
 	case "Landscape":
-		add(`i."Width" > i."Height"`)
+		conds = append(conds, `i."Width" > i."Height"`)
 	case "Portrait":
-		add(`i."Width" < i."Height"`)
+		conds = append(conds, `i."Width" < i."Height"`)
 	case "Square":
-		add(`i."Width" = i."Height"`)
+		conds = append(conds, `i."Width" = i."Height"`)
 	}
 
 	for _, dim := range []struct {
 		key, col string
-	}{{f.width, `i."Width"`}, {f.height, `i."Height"`}, {f.byteSize, `i."ByteSize"`}} {
+		lo, hi   int64
+	}{
+		{f.width, `i."Width"`, math.MinInt32, math.MaxInt32},
+		{f.height, `i."Height"`, math.MinInt32, math.MaxInt32},
+		{f.byteSize, `i."ByteSize"`, math.MinInt64, math.MaxInt64},
+	} {
 		if dim.key == "" {
 			continue
 		}
-		if c, a, ok := dimensionCondition(dim.col, dim.key, ph); ok {
+		if c, ok := dimensionCondition(dim.col, dim.key, dim.lo, dim.hi, a); ok {
 			conds = append(conds, c)
-			args = append(args, a...)
 		}
 	}
 
 	if albumID == nil && f.uploaderID != nil {
-		add(fmt.Sprintf(`i."UploaderId" = %s`, ph()), *f.uploaderID)
+		conds = append(conds, fmt.Sprintf(`i."UploaderId" = %s`, a.add(*f.uploaderID)))
 	}
-	for _, id := range f.includedIDs {
 
-		add(fmt.Sprintf(`i."Id" = %s`, ph()), id)
+	if len(f.includedIDs) == 1 {
+		conds = append(conds, fmt.Sprintf(`i."Id" = %s`, a.add(f.includedIDs[0])))
+	} else if len(f.includedIDs) > 1 {
+		conds = append(conds, "FALSE")
 	}
 	if len(f.excludedIDs) > 0 {
-		add(fmt.Sprintf(`i."Id" <> ALL(%s)`, ph()), f.excludedIDs)
-	}
-	for _, t := range f.includedTags {
-		if n, err := strconv.ParseInt(t, 10, 64); err == nil {
-			add(fmt.Sprintf(`EXISTS (SELECT 1 FROM "ImageTag" it JOIN "Tags" tg ON tg."Id" = it."TagsId" WHERE it."ImagesId" = i."Id" AND tg."Id" = %s)`, ph()), n)
-		} else {
-			add(fmt.Sprintf(`EXISTS (SELECT 1 FROM "ImageTag" it JOIN "Tags" tg ON tg."Id" = it."TagsId" WHERE it."ImagesId" = i."Id" AND tg."Slug" = %s)`, ph()), t)
-		}
-	}
-	for _, t := range f.excludedTags {
-		if n, err := strconv.ParseInt(t, 10, 64); err == nil {
-			add(fmt.Sprintf(`NOT EXISTS (SELECT 1 FROM "ImageTag" it JOIN "Tags" tg ON tg."Id" = it."TagsId" WHERE it."ImagesId" = i."Id" AND tg."Id" = %s)`, ph()), n)
-		} else {
-			add(fmt.Sprintf(`NOT EXISTS (SELECT 1 FROM "ImageTag" it JOIN "Tags" tg ON tg."Id" = it."TagsId" WHERE it."ImagesId" = i."Id" AND tg."Slug" = %s)`, ph()), t)
-		}
-	}
-	for _, a := range f.includedArtists {
-		if n, err := strconv.ParseInt(a, 10, 64); err == nil {
-			add(fmt.Sprintf(`EXISTS (SELECT 1 FROM "ArtistImage" ai JOIN "Artists" ar ON ar."Id" = ai."ArtistsId" WHERE ai."ImagesId" = i."Id" AND ar."Id" = %s)`, ph()), n)
-		} else {
-			add(fmt.Sprintf(`EXISTS (SELECT 1 FROM "ArtistImage" ai JOIN "Artists" ar ON ar."Id" = ai."ArtistsId" WHERE ai."ImagesId" = i."Id" AND lower(ar."Name") = %s)`, ph()), a)
-		}
-	}
-	for _, a := range f.excludedArtists {
-		if n, err := strconv.ParseInt(a, 10, 64); err == nil {
-			add(fmt.Sprintf(`NOT EXISTS (SELECT 1 FROM "ArtistImage" ai JOIN "Artists" ar ON ar."Id" = ai."ArtistsId" WHERE ai."ImagesId" = i."Id" AND ar."Id" = %s)`, ph()), n)
-		} else {
-			add(fmt.Sprintf(`NOT EXISTS (SELECT 1 FROM "ArtistImage" ai JOIN "Artists" ar ON ar."Id" = ai."ArtistsId" WHERE ai."ImagesId" = i."Id" AND lower(ar."Name") = %s)`, ph()), a)
-		}
+		conds = append(conds, fmt.Sprintf(`i."Id" <> ALL(%s)`, a.add(f.excludedIDs)))
 	}
 
-	if len(conds) == 0 {
-		return "", args
+	for _, id := range rf.tagIDs {
+		conds = append(conds, fmt.Sprintf(`EXISTS (SELECT 1 FROM "ImageTag" xit WHERE xit."ImagesId" = i."Id" AND xit."TagsId" = %s)`, a.add(id)))
 	}
-	return " WHERE " + strings.Join(conds, " AND "), args
+	if len(rf.exTagIDs) > 0 {
+		conds = append(conds, fmt.Sprintf(`NOT EXISTS (SELECT 1 FROM "ImageTag" xit WHERE xit."ImagesId" = i."Id" AND xit."TagsId" = ANY(%s))`, a.add(rf.exTagIDs)))
+	}
+	for _, set := range rf.artistSets {
+		if len(set) == 1 {
+			conds = append(conds, fmt.Sprintf(`EXISTS (SELECT 1 FROM "ArtistImage" xai WHERE xai."ImagesId" = i."Id" AND xai."ArtistsId" = %s)`, a.add(set[0])))
+		} else {
+			conds = append(conds, fmt.Sprintf(`EXISTS (SELECT 1 FROM "ArtistImage" xai WHERE xai."ImagesId" = i."Id" AND xai."ArtistsId" = ANY(%s))`, a.add(set)))
+		}
+	}
+	if len(rf.exArtistIDs) > 0 {
+		conds = append(conds, fmt.Sprintf(`NOT EXISTS (SELECT 1 FROM "ArtistImage" xai WHERE xai."ImagesId" = i."Id" AND xai."ArtistsId" = ANY(%s))`, a.add(rf.exArtistIDs)))
+	}
+	return strings.Join(conds, " AND "), a.args
 }
 
-func dimensionCondition(col, v string, ph func() string) (string, []any, bool) {
+func whereClause(conds string) string {
+	if conds == "" {
+		return ""
+	}
+	return " WHERE " + conds
+}
+
+func dimensionCondition(col, v string, lo, hi int64, a *sqlArgs) (string, bool) {
 	parse := func(s string) (int64, bool) {
 		n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
-		return n, err == nil
+		if err != nil {
+			var ne *strconv.NumError
+			if !errors.As(err, &ne) || ne.Err != strconv.ErrRange {
+				return 0, false
+			}
+		}
+		return min(max(n, lo), hi), true
 	}
 	switch {
 	case strings.HasPrefix(v, ">="):
 		if n, ok := parse(v[2:]); ok {
-			return fmt.Sprintf("%s >= %s", col, ph()), []any{n}, true
+			return fmt.Sprintf("%s >= %s", col, a.add(n)), true
 		}
 	case strings.HasPrefix(v, ">"):
 		if n, ok := parse(v[1:]); ok {
-			return fmt.Sprintf("%s > %s", col, ph()), []any{n}, true
+			return fmt.Sprintf("%s > %s", col, a.add(n)), true
 		}
 	case strings.HasPrefix(v, "<="):
 		if n, ok := parse(v[2:]); ok {
-			return fmt.Sprintf("%s <= %s", col, ph()), []any{n}, true
+			return fmt.Sprintf("%s <= %s", col, a.add(n)), true
 		}
 	case strings.HasPrefix(v, "<"):
 		if n, ok := parse(v[1:]); ok {
-			return fmt.Sprintf("%s < %s", col, ph()), []any{n}, true
+			return fmt.Sprintf("%s < %s", col, a.add(n)), true
 		}
 	case strings.Contains(v, ".."):
 		parts := strings.SplitN(v, "..", 2)
 		if lo, ok1 := parse(parts[0]); ok1 {
 			if hi, ok2 := parse(parts[1]); ok2 {
-				return fmt.Sprintf("%s BETWEEN %s AND %s", col, ph(), ph()), []any{lo, hi}, true
+				return fmt.Sprintf("%s BETWEEN %s AND %s", col, a.add(lo), a.add(hi)), true
 			}
 		}
 	default:
 		if n, ok := parse(v); ok {
-			return fmt.Sprintf("%s = %s", col, ph()), []any{n}, true
+			return fmt.Sprintf("%s = %s", col, a.add(n)), true
 		}
 	}
-	return "", nil, false
+	return "", false
 }
 
-func orderClause(f *imageFilter, albumID *int64) (string, error) {
-	switch f.orderBy {
-	case "Random":
-		return " ORDER BY random()", nil
-	case "UploadedAt":
-		return ` ORDER BY i."UploadedAt" DESC`, nil
-	case "Favorites":
-		return ` ORDER BY (SELECT COUNT(*) FROM "AlbumItems" ai JOIN "Albums" al ON al."Id" = ai."AlbumId" AND al."IsDefault" WHERE ai."ImageId" = i."Id") DESC`, nil
-	case "AddedToAlbum":
-		if albumID == nil {
-			return "", errors.New("AddedToAlbum ordering is only available when viewing an album.")
-		}
-		return ` ORDER BY ai."AddedAt" DESC`, nil
-	default:
-		return " ORDER BY random()", nil
+func checkImageOrder(f *imageFilter, albumID *int64) error {
+	if f.orderBy == "AddedToAlbum" && albumID == nil {
+		return errors.New("AddedToAlbum ordering is only available when viewing an album.")
 	}
-}
-
-type imageRow struct {
-	ID             int64
-	PerceptualHash pgtype.Bits
-	Extension      string
-	DominantColor  string
-	Source         *string
-	UploaderID     *int64
-	UploadedAt     time.Time
-	IsNsfw         bool
-	IsAnimated     bool
-	Width          int64
-	Height         int64
-	ByteSize       int64
-	ReviewStatus   int
-	AddedAt        *time.Time
+	return nil
 }
 
 func (s *Server) handleListImages(w http.ResponseWriter, r *http.Request) {
 	ident := IdentityFromContext(r.Context())
-	f, problems := parseImageFilters(r, ident)
-	if len(problems) > 0 {
-		invalidEnumProblem(w, r, problems[0].field, problems[0].value)
-		return
-	}
-
-	if f.reviewStatus != "Accepted" && !isModerator(ident) {
-		Forbidden(w, r, "Filtering by non-accepted review status is only available to moderators and admins.")
-		return
-	}
-	if f.childrenReviewStatus != "Accepted" && !isModerator(ident) {
-		Forbidden(w, r, "Filtering by non-accepted review status is only available to moderators and admins.")
-		return
-	}
-
-	page, pageSize := paginationParams(r, s.cfg.Image.DefaultPageSize, s.cfg.Image.MaxPageSize)
-	where, args := buildImageWhere(f, ident, nil, 0)
-	order, err := orderClause(f, nil)
+	f, err := s.parseImageFilters(r, ident)
 	if err != nil {
+		s.writeDomainError(w, r, err)
+		return
+	}
+	if (f.reviewStatus != "Accepted" || f.childrenReviewStatus != "Accepted") && !isModerator(ident) {
+		Forbidden(w, r, "Filtering by non-accepted review status is only available to moderators and admins.")
+		return
+	}
+
+	page, pageSize := s.paginationParams(r, s.cfg.Image.DefaultPageSize, s.cfg.Image.MaxPageSize)
+	if err := checkImageOrder(f, nil); err != nil {
 		BadRequest(w, r, err.Error())
 		return
 	}
 
+	ctx := r.Context()
+	opts := hydrateOptions{
+		ident:                    ident,
+		childrenReviewStatus:     f.childrenReviewStatus,
+		includeMyPendingChildren: f.includeMyPendingChildren,
+		withUserData:             true,
+	}
+	var items []imageDto
 	var total int64
-	if err := s.db.QueryRow(r.Context(), `SELECT COUNT(*) FROM "Images" i`+where, args...).Scan(&total); err != nil {
-		InternalError(w, r, s.log, err)
-		return
-	}
-
-	query := `SELECT i."Id", i."PerceptualHash", i."Extension", i."DominantColor", i."Source",
-		i."UploaderId", i."UploadedAt", i."IsNsfw", i."IsAnimated", i."Width", i."Height",
-		i."ByteSize", i."ReviewStatus"
-		FROM "Images" i` + where + order
-	query += fmt.Sprintf(" LIMIT %d OFFSET %d", pageSize, (page-1)*pageSize)
-
-	rows, err := s.db.Query(r.Context(), query, args...)
-	if err != nil {
-		InternalError(w, r, s.log, err)
-		return
-	}
-	defer rows.Close()
-
-	items := []imageDto{}
-	for rows.Next() {
-		var row imageRow
-		if err := rows.Scan(&row.ID, &row.PerceptualHash, &row.Extension, &row.DominantColor, &row.Source,
-			&row.UploaderID, &row.UploadedAt, &row.IsNsfw, &row.IsAnimated, &row.Width, &row.Height,
-			&row.ByteSize, &row.ReviewStatus); err != nil {
-			InternalError(w, r, s.log, err)
-			return
-		}
-		dto, err := s.assembleImageDto(r.Context(), row, ident, f.childrenReviewStatus, f.includeMyPendingChildren, nil, false)
+	served := false
+	if s.imageLists.enabled() && cacheableImageFilter(f, ident) {
+		items, total, served, err = s.listImagesFromCache(ctx, f, page, pageSize, opts)
 		if err != nil {
 			InternalError(w, r, s.log, err)
 			return
 		}
-		items = append(items, *dto)
 	}
-
-	writeJSON(w, http.StatusOK, newPaginated(items, page, pageSize, total, s.cfg.Image.MaxPageSize, s.cfg.Image.DefaultPageSize))
-}
-
-func (s *Server) assembleImageDto(ctx context.Context, row imageRow, ident *auth.Identity, childrenReviewStatus string, includeMyPendingChildren bool, albumID *int64, forceUploader bool) (*imageDto, error) {
-	dto := &imageDto{
-		ID:             row.ID,
-		PerceptualHash: bitsToHex(row.PerceptualHash),
-		Extension:      row.Extension,
-		DominantColor:  row.DominantColor,
-		Source:         row.Source,
-		UploaderID:     nil,
-		UploadedAt:     row.UploadedAt,
-		IsNsfw:         row.IsNsfw,
-		IsAnimated:     row.IsAnimated,
-		Width:          row.Width,
-		Height:         row.Height,
-		ByteSize:       row.ByteSize,
-		URL:            s.s3.PublicURL(fmt.Sprintf("%d%s", row.ID, row.Extension)),
-		ReviewStatus:   reviewStatusString(row.ReviewStatus),
-		Artists:        []artistDto{},
-		Tags:           []tagDto{},
-		Albums:         []imageAlbumRef{},
-	}
-	if isModerator(ident) || forceUploader {
-		dto.UploaderID = row.UploaderID
-	}
-
-	childCondFor := func(alias string) string {
-		switch {
-		case childrenReviewStatus == "Pending":
-			return fmt.Sprintf(`%s."ReviewStatus" = 0`, alias)
-		case childrenReviewStatus == "All":
-			return `TRUE`
-		case includeMyPendingChildren && ident != nil:
-			return fmt.Sprintf(`(%s."ReviewStatus" = 1 OR (%s."ReviewStatus" = 0 AND %s."CreatorId" = %d))`, alias, alias, alias, ident.UserID)
-		default:
-			return fmt.Sprintf(`%s."ReviewStatus" = 1`, alias)
-		}
-	}
-
-	tagRows, err := s.db.Query(ctx, fmt.Sprintf(`
-		SELECT tg."Id", tg."Name", tg."Slug", tg."Description", tg."ReviewStatus"
-		FROM "ImageTag" it JOIN "Tags" tg ON tg."Id" = it."TagsId"
-		WHERE it."ImagesId" = $1 AND %s`, childCondFor("tg")), row.ID)
-	if err != nil {
-		return nil, err
-	}
-	defer tagRows.Close()
-	for tagRows.Next() {
-		var t tagDto
-		var rs int
-		if err := tagRows.Scan(&t.ID, &t.Name, &t.Slug, &t.Description, &rs); err != nil {
-			return nil, err
-		}
-		t.ReviewStatus = reviewStatusString(rs)
-		dto.Tags = append(dto.Tags, t)
-	}
-
-	artistRows, err := s.db.Query(ctx, fmt.Sprintf(`
-		SELECT ar."Id", ar."Name", ar."Patreon", ar."Pixiv", ar."Twitter", ar."DeviantArt", ar."ReviewStatus"
-		FROM "ArtistImage" ai JOIN "Artists" ar ON ar."Id" = ai."ArtistsId"
-		WHERE ai."ImagesId" = $1 AND %s`, childCondFor("ar")), row.ID)
-	if err != nil {
-		return nil, err
-	}
-	defer artistRows.Close()
-	for artistRows.Next() {
-		var a artistDto
-		var rs int
-		var patreon, pixiv, twitter, deviantArt *string
-		if err := artistRows.Scan(&a.ID, &a.Name, &patreon, &pixiv, &twitter, &deviantArt, &rs); err != nil {
-			return nil, err
-		}
-		a.ReviewStatus = reviewStatusString(rs)
-		a.Patreon = orEmpty(patreon)
-		a.Pixiv = orEmpty(pixiv)
-		a.Twitter = orEmpty(twitter)
-		a.DeviantArt = orEmpty(deviantArt)
-		dto.Artists = append(dto.Artists, a)
-	}
-
-	if err := s.db.QueryRow(ctx, `
-		SELECT COUNT(*) FROM "AlbumItems" ai
-		JOIN "Albums" al ON al."Id" = ai."AlbumId" AND al."IsDefault"
-		WHERE ai."ImageId" = $1`, row.ID).Scan(&dto.Favorites); err != nil {
-		return nil, err
-	}
-
-	if ident != nil {
-
-		var likedAt *time.Time
-		if err := s.db.QueryRow(ctx, `
-			SELECT ai."AddedAt" FROM "AlbumItems" ai
-			JOIN "Albums" al ON al."Id" = ai."AlbumId" AND al."IsDefault"
-			WHERE ai."ImageId" = $1 AND al."UserId" = $2`, row.ID, ident.UserID).Scan(&likedAt); err == nil {
-			dto.LikedAt = likedAt
-		}
-		albRows, err := s.db.Query(ctx, `
-			SELECT al."Id", al."Name", al."UserId", al."IsDefault"
-			FROM "AlbumItems" ai JOIN "Albums" al ON al."Id" = ai."AlbumId"
-			WHERE ai."ImageId" = $1 AND al."UserId" = $2`, row.ID, ident.UserID)
+	if !served {
+		rows, n, err := s.queryImagePage(ctx, f, ident, nil, page, pageSize)
 		if err != nil {
-			return nil, err
+			InternalError(w, r, s.log, err)
+			return
 		}
-		defer albRows.Close()
-		for albRows.Next() {
-			var ref imageAlbumRef
-			if err := albRows.Scan(&ref.ID, &ref.Name, &ref.UserID, &ref.IsDefault); err != nil {
-				return nil, err
-			}
-			dto.Albums = append(dto.Albums, ref)
+		if items, err = s.hydrateImages(ctx, s.db, rows, opts); err != nil {
+			InternalError(w, r, s.log, err)
+			return
 		}
+		total = n
 	}
 
-	if row.AddedAt != nil {
-		dto.AddedToAlbumAt = row.AddedAt
+	body := s.newPaginated(items, page, pageSize, total, s.cfg.Image.MaxPageSize, s.cfg.Image.DefaultPageSize)
+	if f.orderBy == "Random" {
+		writeJSON(w, http.StatusOK, body)
+		return
 	}
-	return dto, nil
-}
-
-func orEmpty(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
+	writePublicJSON(w, r, body)
 }
 
 func (s *Server) handleGetImage(w http.ResponseWriter, r *http.Request) {
@@ -577,7 +478,7 @@ func (s *Server) handleGetImage(w http.ResponseWriter, r *http.Request) {
 	}
 	ident := IdentityFromContext(r.Context())
 	childrenReviewStatus := "Accepted"
-	if v := r.URL.Query().Get("childrenReviewStatus"); v != "" {
+	if v := queryGet(r, "childrenReviewStatus"); v != "" {
 		var ok bool
 		if childrenReviewStatus, ok = enumValue(v, "Accepted", "Pending", "All"); !ok {
 			invalidEnumProblem(w, r, "childrenReviewStatus", v)
@@ -588,18 +489,30 @@ func (s *Server) handleGetImage(w http.ResponseWriter, r *http.Request) {
 		Forbidden(w, r, "Filtering by non-accepted review status is only available to moderators and admins.")
 		return
 	}
-	includeMyPendingChildren := queryBool(r, "includeMyPendingChildren", false)
 
+	opts := hydrateOptions{
+		ident:                    ident,
+		childrenReviewStatus:     childrenReviewStatus,
+		includeMyPendingChildren: queryBool(r, "includeMyPendingChildren", false),
+		showUploader:             true,
+		withUserData:             true,
+	}
 	var row imageRow
-	err = s.db.QueryRow(r.Context(), `
-		SELECT i."Id", i."PerceptualHash", i."Extension", i."DominantColor", i."Source",
-		i."UploaderId", i."UploadedAt", i."IsNsfw", i."IsAnimated", i."Width", i."Height",
-		i."ByteSize", i."ReviewStatus"
-		FROM "Images" i WHERE i."Id" = $1`, id).
-		Scan(&row.ID, &row.PerceptualHash, &row.Extension, &row.DominantColor, &row.Source,
-			&row.UploaderID, &row.UploadedAt, &row.IsNsfw, &row.IsAnimated, &row.Width, &row.Height,
-			&row.ByteSize, &row.ReviewStatus)
-	if errors.Is(err, pgx.ErrNoRows) {
+	var rowErr error
+	b := &pgx.Batch{}
+	b.Queue(`SELECT `+imageColumns+` FROM "Images" i WHERE i."Id" = $1`, id).QueryRow(func(r pgx.Row) error {
+		row, rowErr = scanImageRow(r, false)
+		if errors.Is(rowErr, pgx.ErrNoRows) {
+			return nil
+		}
+		return rowErr
+	})
+	children := queueImageChildren(b, []int64{id}, opts)
+	err = s.db.SendBatch(r.Context(), b).Close()
+	if err == nil {
+		err = rowErr
+	}
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !canSeeContent(ident, row.ReviewStatus, row.UploaderID)) {
 		NotFound(w, r, fmt.Sprintf("Image with ID %d not found.", id))
 		return
 	}
@@ -607,14 +520,146 @@ func (s *Server) handleGetImage(w http.ResponseWriter, r *http.Request) {
 		InternalError(w, r, s.log, err)
 		return
 	}
-
-	dto, err := s.assembleImageDto(r.Context(), row, ident, childrenReviewStatus, includeMyPendingChildren, nil, false)
-	if err != nil {
-		InternalError(w, r, s.log, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, dto)
+	dto := s.imageDtos([]imageRow{row}, opts, children)[0]
+	writePublicJSON(w, r, &dto)
 }
+
+type processedImage struct {
+	info        *imaging.Info
+	data        []byte
+	ext         string
+	contentType string
+	hash        uint64
+	dominant    string
+}
+
+var allowedUploadContentTypes = map[string]bool{
+	"image/jpeg": true, "image/png": true, "image/gif": true, "image/webp": true,
+}
+
+func (s *Server) maxUploadBytes() int64 { return int64(s.cfg.MaxUploadMB) * 1024 * 1024 }
+
+func (s *Server) parseMultipart(w http.ResponseWriter, r *http.Request) error {
+	r.Body = http.MaxBytesReader(w, r.Body, s.maxUploadBytes()+(1<<20))
+	if err := r.ParseMultipartForm(8 << 20); err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			return errPayloadTooLarge(fmt.Sprintf("The request body exceeds the maximum size of %d MB.", s.cfg.MaxUploadMB))
+		}
+		return errBadRequest("Invalid multipart form.")
+	}
+	return nil
+}
+
+func (s *Server) processImageFile(ctx context.Context, file multipart.File, header *multipart.FileHeader) (*processedImage, error) {
+	maxBytes := s.maxUploadBytes()
+	if header.Size > maxBytes {
+		return nil, errPayloadTooLarge(fmt.Sprintf("The request body exceeds the maximum size of %d MB.", s.cfg.MaxUploadMB))
+	}
+	if strings.TrimSpace(header.Filename) == "" {
+		return nil, errFieldValidation("FileName", "File name is required.")
+	}
+	contentType := strings.ToLower(strings.TrimSpace(header.Header.Get("Content-Type")))
+	if contentType == "" {
+		return nil, errFieldValidation("ContentType", "Content type is required.")
+	}
+	if i := strings.Index(contentType, ";"); i >= 0 {
+		contentType = strings.TrimSpace(contentType[:i])
+	}
+	if !allowedUploadContentTypes[contentType] {
+		return nil, errFieldValidation("ContentType", "Only JPEG, PNG, GIF, and WEBP formats are supported.")
+	}
+
+	data, err := imaging.ReadAll(file, maxBytes)
+	if errors.Is(err, imaging.ErrTooLarge) {
+		return nil, errPayloadTooLarge(fmt.Sprintf("The request body exceeds the maximum size of %d MB.", s.cfg.MaxUploadMB))
+	}
+	if err != nil {
+		return nil, errBadRequest("The uploaded file could not be read.")
+	}
+
+	info, err := imaging.Probe(data)
+	if errors.Is(err, imaging.ErrUnsupportedFormat) {
+		return nil, errFieldValidation("ContentType", "Only JPEG, PNG, GIF, and WEBP formats are supported.")
+	}
+	if errors.Is(err, imaging.ErrTooComplex) {
+		return nil, errInvalidOperation(fmt.Sprintf(
+			"The JPEG file contains too many scans (maximum %d). Please save it again with a standard encoder.", imaging.MaxJPEGScans))
+	}
+	if err != nil {
+		return nil, errBadRequest("The uploaded file is not a valid image.")
+	}
+	if err := imaging.ValidateDimensions(info,
+		s.cfg.Image.MinWidth, s.cfg.Image.MinHeight, s.cfg.Image.MaxWidth, s.cfg.Image.MaxHeight,
+		s.cfg.Image.AnimatedMinWidth, s.cfg.Image.AnimatedMinHeight, s.cfg.Image.AnimatedMaxWidth, s.cfg.Image.AnimatedMaxHeight); err != nil {
+		return nil, errInvalidOperation(err.Error())
+	}
+	if limit := s.cfg.Limits.MaxDecodeBytes; limit > 0 && info.DecodeBytes > limit {
+		return nil, errInvalidOperation(fmt.Sprintf(
+			"The image needs too much memory to process (about %d MB, maximum %d MB). Please upload a smaller image or save it as a baseline JPEG or 8-bit PNG.",
+			(info.DecodeBytes+(1<<20)-1)>>20, limit>>20))
+	}
+
+	release, err := s.acquireImageSlot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	stored, stripped := data, false
+	if clean, err := imaging.StripMetadata(data, info); err == nil {
+		stored, stripped = clean, true
+	}
+	img, err := imaging.Decode(stored, info, s.cfg.Limits.MaxImagePixels)
+	if err != nil && stripped && !errors.Is(err, imaging.ErrTooManyPixels) {
+		if original, oerr := imaging.Decode(data, info, s.cfg.Limits.MaxImagePixels); oerr == nil {
+			s.log.Warn("removing image metadata made the file unreadable, keeping the original", "format", info.Format)
+			img, err, stored = original, nil, data
+		}
+	}
+	if errors.Is(err, imaging.ErrTooManyPixels) {
+		return nil, errInvalidOperation(fmt.Sprintf("Image resolution is too high (%dx%d).", info.Width, info.Height))
+	}
+	if err != nil {
+		return nil, errBadRequest("The uploaded file is not a valid image.")
+	}
+
+	return &processedImage{
+		info:        info,
+		data:        stored,
+		ext:         imaging.Extension(info.Format, strings.ToLower(filepath.Ext(header.Filename))),
+		contentType: imaging.ContentType(info.Format),
+		hash:        imaging.PerceptualHash(img, info.Orientation),
+		dominant:    imaging.DominantColor(img),
+	}, nil
+}
+
+type duplicateImage struct {
+	id           int64
+	reviewStatus int
+	uploaderID   *int64
+}
+
+func (d duplicateImage) conflictMessage(ident *auth.Identity) string {
+	if canSeeContent(ident, d.reviewStatus, d.uploaderID) {
+		return fmt.Sprintf("Duplicate image found. ID: %d", d.id)
+	}
+	return "Duplicate image found."
+}
+
+func (s *Server) findDuplicate(ctx context.Context, q querier, hash uint64, excludeID int64) (duplicateImage, error) {
+	var d duplicateImage
+	err := q.QueryRow(ctx, `
+		SELECT "Id", "ReviewStatus", "UploaderId" FROM "Images"
+		WHERE "Id" <> $1 AND bit_count("PerceptualHash" # $2::bit(64)) <= $3
+		ORDER BY "Id" LIMIT 1`, excludeID, hashToBits(hash), duplicateDistance).Scan(&d.id, &d.reviewStatus, &d.uploaderID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return duplicateImage{}, nil
+	}
+	return d, err
+}
+
+const uploadLockKey int64 = 0x5761696675
 
 func (s *Server) handleUploadImage(w http.ResponseWriter, r *http.Request) {
 	ident := IdentityFromContext(r.Context())
@@ -622,14 +667,10 @@ func (s *Server) handleUploadImage(w http.ResponseWriter, r *http.Request) {
 		s.permissionRoleForbidden(w, r, s.cfg.Permissions.ImageUploadMinRole, auth.RoleUser)
 		return
 	}
+	ctx := r.Context()
 
-	maxBytes := int64(s.cfg.MaxUploadMB) * 1024 * 1024
-	r.Body = http.MaxBytesReader(w, r.Body, maxBytes+(1<<20))
-	if err := r.ParseMultipartForm(maxBytes); err != nil {
-		WriteProblem(w, r, http.StatusRequestEntityTooLarge,
-			"https://tools.ietf.org/html/rfc9110#section-15.5.14",
-			"Request Entity Too Large",
-			fmt.Sprintf("The request body exceeds the maximum size of %d MB.", s.cfg.MaxUploadMB))
+	if err := s.parseMultipart(w, r); err != nil {
+		s.writeDomainError(w, r, err)
 		return
 	}
 	defer r.MultipartForm.RemoveAll()
@@ -641,218 +682,195 @@ func (s *Server) handleUploadImage(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	if strings.TrimSpace(header.Filename) == "" {
-		WriteValidationProblem(w, r, map[string][]string{"FileName": {"File name is required."}})
-		return
-	}
-	contentType := header.Header.Get("Content-Type")
-	if contentType == "" {
-		WriteValidationProblem(w, r, map[string][]string{"ContentType": {"Content type is required."}})
-		return
-	}
-	switch strings.ToLower(contentType) {
-	case "image/jpeg", "image/png", "image/gif", "image/webp":
-	default:
-		WriteValidationProblem(w, r, map[string][]string{"ContentType": {"Only JPEG, PNG, GIF, and WEBP formats are supported."}})
-		return
-	}
-
-	info, img, err := imaging.Decode(file)
+	img, err := s.processImageFile(ctx, file, header)
 	if err != nil {
-		BadRequest(w, r, "The uploaded file is not a valid image.")
-		return
-	}
-
-	ext := strings.ToLower(filepath.Ext(header.Filename))
-
-	if err := imaging.ValidateDimensions(info,
-		s.cfg.Image.MinWidth, s.cfg.Image.MinHeight, s.cfg.Image.MaxWidth, s.cfg.Image.MaxHeight,
-		s.cfg.Image.AnimatedMinWidth, s.cfg.Image.AnimatedMinHeight, s.cfg.Image.AnimatedMaxWidth, s.cfg.Image.AnimatedMaxHeight); err != nil {
-		InvalidOperation(w, r, err.Error())
+		s.writeDomainError(w, r, err)
 		return
 	}
 
 	source := strings.TrimSpace(r.FormValue("source"))
-	if len(source) > 500 {
+	if runeLen(source) > 500 {
 		WriteValidationProblem(w, r, map[string][]string{"Source": {"Source URL must not exceed 500 characters."}})
 		return
 	}
-	if source != "" && !isAbsoluteURL(source) {
-		WriteValidationProblem(w, r, map[string][]string{"Source": {"Source must be a valid URL."}})
+	if source != "" && !isValidWebURL(source) {
+		WriteValidationProblem(w, r, map[string][]string{"Source": {"Source must be a valid http(s) URL."}})
 		return
 	}
+	isNsfw := strings.EqualFold(strings.TrimSpace(r.FormValue("isNsfw")), "true")
 
-	isNsfw := false
-	if v := r.FormValue("isNsfw"); v != "" {
-		isNsfw = strings.EqualFold(v, "true")
-	}
-
-	dominant := imaging.DominantColor(img)
-	hash := imaging.PerceptualHash(img, info.Orientation)
-	hashHex := fmt.Sprintf("%016x", hash)
-
-	if dupID, err := s.findDuplicate(r.Context(), hash, 0); err == nil && dupID > 0 {
-		Conflict(w, r, fmt.Sprintf("Duplicate image found. ID: %d", dupID))
-		return
-	}
-
-	artistIDs := r.MultipartForm.Value["artists"]
-	tagSlugs := r.MultipartForm.Value["tags"]
-
-	artists, err := s.resolveArtistsByIDs(r.Context(), artistIDs)
+	tagSlugs, err := cleanSlugList(r.MultipartForm.Value["tags"], s.cfg.Limits.MaxTagsPerImage, "tags")
 	if err != nil {
-		NotFound(w, r, err.Error())
+		s.writeDomainError(w, r, err)
 		return
 	}
-	tags, err := s.resolveTagsBySlugs(r.Context(), tagSlugs)
+	artistIDs, err := cleanIDFormList(r.MultipartForm.Value["artists"], s.cfg.Limits.MaxArtistsPerImage, "artists")
 	if err != nil {
-		NotFound(w, r, err.Error())
+		s.writeDomainError(w, r, err)
 		return
 	}
-
-	reviewStatus := 0
-	requireReview := s.cfg.Review.RequireImageReview
-	if !requireReview || auth.ReviewBypassed(ident.Role, s.cfg.Review.ImageReviewBypassMinRole) {
-		reviewStatus = 1
-	}
-
-	byteSize := header.Size
-
-	tx, err := s.db.Begin(r.Context())
+	artists, err := s.resolveArtistsByIDs(ctx, s.db, artistIDs, ident)
 	if err != nil {
-		InternalError(w, r, s.log, err)
+		s.writeDomainError(w, r, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
-
-	var imageID int64
-	err = tx.QueryRow(r.Context(), `
-		INSERT INTO "Images" ("PerceptualHash","Extension","DominantColor","Source","UploaderId",
-			"UploadedAt","IsNsfw","IsAnimated","Width","Height","ByteSize","ReviewStatus")
-		VALUES ($1,$2,$3,$4,$5,now(),$6,$7,$8,$9,$10,$11)
-		RETURNING "Id"`,
-		hexToBits(hashHex), ext, dominant, orEmptyString(source), ident.UserID,
-		isNsfw, info.IsAnimated, info.Width, info.Height, byteSize, reviewStatus).Scan(&imageID)
+	tags, err := s.resolveTagsBySlugs(ctx, s.db, tagSlugs, ident)
 	if err != nil {
-		InternalError(w, r, s.log, err)
+		s.writeDomainError(w, r, err)
 		return
 	}
 
-	now := time.Now().UTC()
-	if reviewStatus == 1 {
-		_, err = tx.Exec(r.Context(), `
-			INSERT INTO "ReviewTasks" ("Kind","TargetType","TargetId","SubmitterId","Status","ReviewerNote","CreatedAt","ResolvedAt")
-			VALUES (0,0,$1,$2,1,'Auto-accepted (trusted role).',$3,$3)`, imageID, ident.UserID, now)
-	} else {
-		_, err = tx.Exec(r.Context(), `
+	autoAccept := !s.cfg.Review.RequireImageReview || auth.ReviewBypassed(ident.Role, s.cfg.Review.ImageReviewBypassMinRole)
+
+	var imageID, taskID int64
+	slot, err := s.cluster.reserve(ctx)
+	if err != nil {
+		s.writeDomainError(w, r, err)
+		return
+	}
+	defer slot.release()
+	unlock := func() {}
+	defer func() { unlock() }()
+	err = pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
+		if !autoAccept {
+			if err := s.checkPendingSubmissions(ctx, tx, ident.UserID); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, uploadLockKey); err != nil {
+			return err
+		}
+		dup, err := s.findDuplicate(ctx, tx, img.hash, 0)
+		if err != nil {
+			return err
+		}
+		if dup.id > 0 {
+			return errConflict(dup.conflictMessage(ident))
+		}
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO "Images" ("PerceptualHash","Extension","DominantColor","Source","UploaderId",
+				"UploadedAt","IsNsfw","IsAnimated","Width","Height","ByteSize","ReviewStatus")
+			VALUES ($1,$2,$3,$4,$5,now(),$6,$7,$8,$9,$10,0)
+			RETURNING "Id"`,
+			hashToBits(img.hash), img.ext, img.dominant, orEmptyString(source), ident.UserID,
+			isNsfw, img.info.IsAnimated, img.info.Width, img.info.Height, int64(len(img.data))).Scan(&imageID); err != nil {
+			return err
+		}
+		lockCtx, cancelLock := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancelLock()
+		var lerr error
+		if unlock, lerr = slot.lockNew(lockCtx, imageID); lerr != nil {
+			return lerr
+		}
+		if err := tx.QueryRow(ctx, `
 			INSERT INTO "ReviewTasks" ("Kind","TargetType","TargetId","SubmitterId","Status","CreatedAt")
-			VALUES (0,0,$1,$2,0,$3)`, imageID, ident.UserID, now)
-	}
-	if err != nil {
-		InternalError(w, r, s.log, err)
-		return
-	}
-
-	for _, t := range tags {
-		if _, err := tx.Exec(r.Context(), `INSERT INTO "ImageTag" ("ImagesId","TagsId") VALUES ($1,$2)`, imageID, t.ID); err != nil {
-			InternalError(w, r, s.log, err)
-			return
+			VALUES (0,0,$1,$2,0,now()) RETURNING "Id"`, imageID, ident.UserID).Scan(&taskID); err != nil {
+			return err
 		}
-	}
-	for _, a := range artists {
-		if _, err := tx.Exec(r.Context(), `INSERT INTO "ArtistImage" ("ArtistsId","ImagesId") VALUES ($1,$2)`, a.ID, imageID); err != nil {
-			InternalError(w, r, s.log, err)
-			return
+		for _, t := range tags {
+			if _, err := tx.Exec(ctx, `INSERT INTO "ImageTag" ("ImagesId","TagsId") VALUES ($1,$2)`, imageID, t.ID); err != nil {
+				return err
+			}
 		}
-	}
-
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		InternalError(w, r, s.log, err)
-		return
-	}
-	key := fmt.Sprintf("%d%s", imageID, ext)
-	if err := s.s3.Upload(r.Context(), key, file, header.Size, contentType); err != nil {
-		InternalError(w, r, s.log, err)
-		return
-	}
-
-	if err := tx.Commit(r.Context()); err != nil {
-		InternalError(w, r, s.log, err)
+		for _, a := range artists {
+			if _, err := tx.Exec(ctx, `INSERT INTO "ArtistImage" ("ArtistsId","ImagesId") VALUES ($1,$2)`, a.ID, imageID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		s.writeDomainError(w, r, err)
 		return
 	}
 
-	var row imageRow
-	err = s.db.QueryRow(r.Context(), `
-		SELECT "Id","PerceptualHash","Extension","DominantColor","Source","UploaderId","UploadedAt",
-			"IsNsfw","IsAnimated","Width","Height","ByteSize","ReviewStatus"
-		FROM "Images" WHERE "Id" = $1`, imageID).
-		Scan(&row.ID, &row.PerceptualHash, &row.Extension, &row.DominantColor, &row.Source, &row.UploaderID,
-			&row.UploadedAt, &row.IsNsfw, &row.IsAnimated, &row.Width, &row.Height, &row.ByteSize, &row.ReviewStatus)
+	finishDetached := s.beginDetached()
+	defer finishDetached()
+	key := imageKey(imageID, img.ext)
+	uploadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	err = s.s3.Upload(uploadCtx, key, bytes.NewReader(img.data), int64(len(img.data)), img.contentType)
+	cancel()
+	if err != nil {
+		s.log.Error("storage upload failed, rolling back image", "imageId", imageID, "error", err)
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		_ = pgx.BeginFunc(cleanupCtx, s.db, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(cleanupCtx, `DELETE FROM "ReviewTasks" WHERE "Id" = $1`, taskID); err != nil {
+				return err
+			}
+			_, err := tx.Exec(cleanupCtx, `DELETE FROM "Images" WHERE "Id" = $1`, imageID)
+			return err
+		})
+		s.objects.remove(cleanupCtx, key)
+		cancel()
+		InternalError(w, r, s.log, err)
+		return
+	}
+
+	finishCtx, cancelFinish := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancelFinish()
+	removed := false
+	err = pgx.BeginFunc(finishCtx, s.db, func(tx pgx.Tx) error {
+		taskStatus := -1
+		if err := tx.QueryRow(finishCtx, `SELECT "Status" FROM "ReviewTasks" WHERE "Id" = $1 FOR UPDATE`, taskID).
+			Scan(&taskStatus); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		var reviewStatus int
+		err := tx.QueryRow(finishCtx, `SELECT "ReviewStatus" FROM "Images" WHERE "Id" = $1 FOR UPDATE`, imageID).Scan(&reviewStatus)
+		if errors.Is(err, pgx.ErrNoRows) {
+			removed = true
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !autoAccept || taskStatus != 0 || reviewStatus != 0 {
+			return nil
+		}
+		if _, err := tx.Exec(finishCtx, `UPDATE "Images" SET "ReviewStatus" = 1 WHERE "Id" = $1 AND "ReviewStatus" = 0`, imageID); err != nil {
+			return err
+		}
+		_, err = tx.Exec(finishCtx, `
+			UPDATE "ReviewTasks" SET "Status" = 1, "ReviewerNote" = 'Auto-accepted (trusted role).', "ResolvedAt" = now()
+			WHERE "Id" = $1 AND "Status" = 0`, taskID)
+		return err
+	})
+	if err != nil {
+		s.log.Error("finishing upload failed", "imageId", imageID, "error", err)
+		checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		var exists bool
+		if qerr := s.db.QueryRow(checkCtx, `SELECT EXISTS(SELECT 1 FROM "Images" WHERE "Id" = $1)`, imageID).Scan(&exists); qerr == nil && !exists {
+			removed = true
+		}
+		cancel()
+	}
+	if removed {
+		s.removeStoredImage(finishCtx, key)
+		unlock()
+		finishDetached()
+		s.writeDomainError(w, r, errConflict("The upload was cancelled or removed while it was being processed."))
+		return
+	}
+	unlock()
+	finishDetached()
+
+	row, err := s.loadImageRow(ctx, s.db, imageID)
 	if err != nil {
 		InternalError(w, r, s.log, err)
 		return
 	}
-	dto, err := s.assembleImageDto(r.Context(), row, ident, "All", false, nil, true)
+	dto, err := s.hydrateImage(ctx, s.db, row, hydrateOptions{ident: ident, childrenReviewStatus: "All", showUploader: true})
 	if err != nil {
 		InternalError(w, r, s.log, err)
 		return
 	}
-	dto.Favorites = 0
-	dto.LikedAt = nil
 	w.Header().Set("Location", fmt.Sprintf("/images/%d", imageID))
 	writeJSON(w, http.StatusCreated, dto)
 }
 
-func (s *Server) findDuplicate(ctx context.Context, hash uint64, excludeID int64) (int64, error) {
-	wire := storedHash(hash)
-	rows, err := s.db.Query(ctx, `SELECT "Id", "PerceptualHash" FROM "Images" WHERE "Id" <> $1`, excludeID)
-	if err != nil {
-		return 0, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id int64
-		var b pgtype.Bits
-		if err := rows.Scan(&id, &b); err != nil {
-			return 0, err
-		}
-		var other uint64
-		for _, by := range b.Bytes {
-			other = other<<8 | uint64(by)
-		}
-		if hammingDistance(wire, other) <= 4 {
-			return id, nil
-		}
-	}
-	return 0, nil
-}
-
-func orEmptyString(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}
-
-func isAbsoluteURL(s string) bool {
-	i := strings.Index(s, ":")
-	if i <= 0 {
-		return false
-	}
-	scheme := s[:i]
-	if scheme == "" {
-		return false
-	}
-	for _, c := range scheme {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.') {
-			return false
-		}
-	}
-	return true
-}
-
 func (s *Server) handlePatchImage(w http.ResponseWriter, r *http.Request) {
 	ident := IdentityFromContext(r.Context())
+	ctx := r.Context()
 	id, err := parseID(r.PathValue("id"))
 	if err != nil {
 		RouteNotFound(w, r)
@@ -860,22 +878,22 @@ func (s *Server) handlePatchImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var exists bool
-	if err := s.db.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM "Images" WHERE "Id" = $1)`, id).Scan(&exists); err != nil || !exists {
+	if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM "Images" WHERE "Id" = $1)`, id).Scan(&exists); err != nil {
+		InternalError(w, r, s.log, err)
+		return
+	}
+	if !exists {
 		NotFound(w, r, fmt.Sprintf("Image with ID %d not found.", id))
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.MaxUploadMB)*1024*1024+(1<<20))
-	if err := r.ParseMultipartForm(int64(s.cfg.MaxUploadMB) * 1024 * 1024); err != nil {
-		BadRequest(w, r, "Invalid multipart form.")
+	if err := s.parseMultipart(w, r); err != nil {
+		s.writeDomainError(w, r, err)
 		return
 	}
 	defer r.MultipartForm.RemoveAll()
 
-	isNsfw := false
-	if v := r.FormValue("isNsfw"); v != "" {
-		isNsfw = strings.EqualFold(v, "true")
-	}
+	isNsfw := strings.EqualFold(strings.TrimSpace(r.FormValue("isNsfw")), "true")
 
 	reviewStatus := ""
 	if v := r.FormValue("reviewStatus"); v != "" {
@@ -886,217 +904,221 @@ func (s *Server) handlePatchImage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var (
-		newInfo        *imaging.Info
-		newImg         image.Image
-		newHashHex     string
-		newExt         string
-		newContentType string
-		newByteSize    int64
-		replacedFile   bool
-		replFile       interface {
-			io.Reader
-			io.Seeker
-			io.Closer
-		}
-	)
-	if file, header, ferr := r.FormFile("file"); ferr == nil {
-		replFile = file
-		info, img, decErr := imaging.Decode(file)
-		if decErr != nil {
-			BadRequest(w, r, "The uploaded file is not a valid image.")
-			return
-		}
-		if err := imaging.ValidateDimensions(info,
-			s.cfg.Image.MinWidth, s.cfg.Image.MinHeight, s.cfg.Image.MaxWidth, s.cfg.Image.MaxHeight,
-			s.cfg.Image.AnimatedMinWidth, s.cfg.Image.AnimatedMinHeight, s.cfg.Image.AnimatedMaxWidth, s.cfg.Image.AnimatedMaxHeight); err != nil {
-			InvalidOperation(w, r, err.Error())
-			return
-		}
-		hash := imaging.PerceptualHash(img, info.Orientation)
-		if dupID, derr := s.findDuplicate(r.Context(), hash, id); derr == nil && dupID > 0 {
-			Conflict(w, r, fmt.Sprintf("Duplicate image found. ID: %d", dupID))
-			return
-		}
-		newInfo = info
-		newImg = img
-		newHashHex = fmt.Sprintf("%016x", hash)
-		newExt = strings.ToLower(filepath.Ext(header.Filename))
-		newContentType = header.Header.Get("Content-Type")
-		newByteSize = header.Size
-		replacedFile = true
+	sourceRaw := strings.TrimSpace(r.FormValue("source"))
+	if runeLen(sourceRaw) > 500 {
+		WriteValidationProblem(w, r, map[string][]string{"Source": {"Source URL must not exceed 500 characters."}})
+		return
 	}
-	if replFile != nil {
-		defer replFile.Close()
+	if sourceRaw != "" && !isValidWebURL(sourceRaw) {
+		WriteValidationProblem(w, r, map[string][]string{"Source": {"Source must be a valid http(s) URL."}})
+		return
 	}
+	source := orEmptyString(sourceRaw)
 
-	source := orEmptyString(strings.TrimSpace(r.FormValue("source")))
+	var replacement *processedImage
+	if file, header, ferr := r.FormFile("file"); ferr == nil {
+		replacement, err = s.processImageFile(ctx, file, header)
+		file.Close()
+		if err != nil {
+			s.writeDomainError(w, r, err)
+			return
+		}
+		dup, err := s.findDuplicate(ctx, s.db, replacement.hash, id)
+		if err != nil {
+			InternalError(w, r, s.log, err)
+			return
+		}
+		if dup.id > 0 {
+			Conflict(w, r, dup.conflictMessage(IdentityFromContext(ctx)))
+			return
+		}
+	}
 
 	var newUploader *int64
-	if v := r.FormValue("userId"); v != "" {
+	if v := strings.TrimSpace(r.FormValue("userId")); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
 			var uExists bool
-			if err := s.db.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM "Users" WHERE "Id" = $1)`, n).Scan(&uExists); err != nil || !uExists {
+			if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM "Users" WHERE "Id" = $1)`, n).Scan(&uExists); err != nil {
+				InternalError(w, r, s.log, err)
+				return
+			}
+			if !uExists {
 				NotFound(w, r, fmt.Sprintf("User with ID %d not found.", n))
 				return
 			}
 			newUploader = &n
 		}
-
 	}
 
 	var newTags []tagDto
-	var hasTags bool
-	if vals, ok := r.MultipartForm.Value["tags"]; ok {
-		hasTags = true
-		trimmed := make([]string, 0, len(vals))
-		for _, v := range vals {
-			trimmed = append(trimmed, strings.TrimSpace(v))
+	_, hasTags := r.MultipartForm.Value["tags"]
+	if hasTags {
+		slugs, err := cleanSlugList(r.MultipartForm.Value["tags"], s.cfg.Limits.MaxTagsPerImage, "tags")
+		if err != nil {
+			s.writeDomainError(w, r, err)
+			return
 		}
-		if len(trimmed) > 0 {
-			tags, terr := s.resolveTagsBySlugs(r.Context(), trimmed)
-			if terr != nil {
-				NotFound(w, r, terr.Error())
-				return
-			}
-			newTags = tags
+		if newTags, err = s.resolveTagsBySlugs(ctx, s.db, slugs, ident); err != nil {
+			s.writeDomainError(w, r, err)
+			return
 		}
 	}
 	var newArtists []artistDto
-	var hasArtists bool
-	if vals, ok := r.MultipartForm.Value["artists"]; ok {
-		hasArtists = true
-		rawIDs := make([]string, 0, len(vals))
-		for _, v := range vals {
-			rawIDs = append(rawIDs, strings.TrimSpace(v))
-		}
-		if len(rawIDs) > 0 {
-			artists, aerr := s.resolveArtistsByIDs(r.Context(), rawIDs)
-			if aerr != nil {
-				NotFound(w, r, aerr.Error())
-				return
-			}
-			newArtists = artists
-		}
-	}
-
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		InternalError(w, r, s.log, err)
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	if _, err := tx.Exec(r.Context(), `UPDATE "Images" SET "Source" = $1, "IsNsfw" = $2, "UploaderId" = $3 WHERE "Id" = $4`,
-		source, isNsfw, newUploader, id); err != nil {
-		InternalError(w, r, s.log, err)
-		return
-	}
-
-	if hasTags {
-		if _, err := tx.Exec(r.Context(), `DELETE FROM "ImageTag" WHERE "ImagesId" = $1`, id); err != nil {
-			InternalError(w, r, s.log, err)
-			return
-		}
-		for _, t := range newTags {
-			if _, err := tx.Exec(r.Context(), `INSERT INTO "ImageTag" ("ImagesId","TagsId") VALUES ($1,$2)`, id, t.ID); err != nil {
-				InternalError(w, r, s.log, err)
-				return
-			}
-		}
-	}
+	_, hasArtists := r.MultipartForm.Value["artists"]
 	if hasArtists {
-		if _, err := tx.Exec(r.Context(), `DELETE FROM "ArtistImage" WHERE "ImagesId" = $1`, id); err != nil {
-			InternalError(w, r, s.log, err)
+		ids, err := cleanIDFormList(r.MultipartForm.Value["artists"], s.cfg.Limits.MaxArtistsPerImage, "artists")
+		if err != nil {
+			s.writeDomainError(w, r, err)
 			return
 		}
-		for _, a := range newArtists {
-			if _, err := tx.Exec(r.Context(), `INSERT INTO "ArtistImage" ("ArtistsId","ImagesId") VALUES ($1,$2)`, a.ID, id); err != nil {
-				InternalError(w, r, s.log, err)
+		if newArtists, err = s.resolveArtistsByIDs(ctx, s.db, ids, ident); err != nil {
+			s.writeDomainError(w, r, err)
+			return
+		}
+	}
+
+	var rowExt, newKey string
+	unlock, finishDetached := func() {}, func() {}
+	defer func() {
+		unlock()
+		finishDetached()
+	}()
+	if replacement != nil {
+		var lerr error
+		if unlock, lerr = s.lockImage(ctx, id); lerr != nil {
+			s.writeDomainError(w, r, lerr)
+			return
+		}
+		finishDetached = s.beginDetached()
+		if err := s.db.QueryRow(ctx, `SELECT "Extension" FROM "Images" WHERE "Id" = $1`, id).Scan(&rowExt); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				NotFound(w, r, fmt.Sprintf("Image with ID %d not found.", id))
 				return
 			}
-		}
-	}
-
-	if reviewStatus == "Accepted" {
-		if _, err := tx.Exec(r.Context(), `UPDATE "Images" SET "ReviewStatus" = 1 WHERE "Id" = $1`, id); err != nil {
 			InternalError(w, r, s.log, err)
 			return
 		}
-
-		if _, err := tx.Exec(r.Context(), `
-			UPDATE "ReviewTasks" SET "Status" = 1, "ResolvedAt" = now()
-			WHERE "TargetType" = 0 AND "TargetId" = $1 AND "Kind" = 0 AND "Status" = 0`, id); err != nil {
-			InternalError(w, r, s.log, err)
-			return
-		}
-	} else if reviewStatus == "Pending" {
-		if _, err := tx.Exec(r.Context(), `UPDATE "Images" SET "ReviewStatus" = 0 WHERE "Id" = $1`, id); err != nil {
-			InternalError(w, r, s.log, err)
-			return
-		}
-	}
-
-	var oldExt string
-	if replacedFile {
-		if err := tx.QueryRow(r.Context(), `SELECT "Extension" FROM "Images" WHERE "Id" = $1`, id).Scan(&oldExt); err != nil {
-			InternalError(w, r, s.log, err)
-			return
-		}
-		dominant := imaging.DominantColor(newImg)
-		if _, err := tx.Exec(r.Context(), `
-			UPDATE "Images" SET "Extension" = $1, "PerceptualHash" = $2, "DominantColor" = $3,
-				"IsAnimated" = $4, "Width" = $5, "Height" = $6, "ByteSize" = $7
-			WHERE "Id" = $8`,
-			newExt, hexToBits(newHashHex), dominant, newInfo.IsAnimated,
-			newInfo.Width, newInfo.Height, newByteSize, id); err != nil {
+		newKey = imageKey(id, replacement.ext)
+		uploadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		err := s.s3.Upload(uploadCtx, newKey, bytes.NewReader(replacement.data), int64(len(replacement.data)), replacement.contentType)
+		cancel()
+		if err != nil {
+			if newKey != imageKey(id, rowExt) {
+				s.objects.remove(ctx, newKey)
+			} else {
+				s.log.Error("storing the replacement failed; the file may have been replaced anyway, repeat the edit",
+					"imageId", id, "error", err)
+			}
 			InternalError(w, r, s.log, err)
 			return
 		}
 	}
 
-	if err := tx.Commit(r.Context()); err != nil {
-		InternalError(w, r, s.log, err)
+	txCtx := ctx
+	if replacement != nil {
+		var cancelTx context.CancelFunc
+		txCtx, cancelTx = context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancelTx()
+	}
+	imageGone := false
+	err = pgx.BeginFunc(txCtx, s.db, func(tx pgx.Tx) error {
+		if err := lockPendingTasks(txCtx, tx, 0, id); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(txCtx, `SELECT "Extension" FROM "Images" WHERE "Id" = $1 FOR UPDATE`, id).Scan(&rowExt); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				imageGone = true
+				return errNotFound(fmt.Sprintf("Image with ID %d not found.", id))
+			}
+			return err
+		}
+		if _, err := tx.Exec(txCtx, `UPDATE "Images" SET "Source" = $1, "IsNsfw" = $2, "UploaderId" = $3 WHERE "Id" = $4`,
+			source, isNsfw, newUploader, id); err != nil {
+			return err
+		}
+		if hasTags {
+			if _, err := tx.Exec(txCtx, `DELETE FROM "ImageTag" WHERE "ImagesId" = $1`, id); err != nil {
+				return err
+			}
+			for _, t := range newTags {
+				if _, err := tx.Exec(txCtx, `INSERT INTO "ImageTag" ("ImagesId","TagsId") VALUES ($1,$2)`, id, t.ID); err != nil {
+					return err
+				}
+			}
+		}
+		if hasArtists {
+			if _, err := tx.Exec(txCtx, `DELETE FROM "ArtistImage" WHERE "ImagesId" = $1`, id); err != nil {
+				return err
+			}
+			for _, a := range newArtists {
+				if _, err := tx.Exec(txCtx, `INSERT INTO "ArtistImage" ("ArtistsId","ImagesId") VALUES ($1,$2)`, a.ID, id); err != nil {
+					return err
+				}
+			}
+		}
+		switch reviewStatus {
+		case "Accepted":
+			if _, err := tx.Exec(txCtx, `UPDATE "Images" SET "ReviewStatus" = 1 WHERE "Id" = $1`, id); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(txCtx, `
+				UPDATE "ReviewTasks" SET "Status" = 1, "ReviewerId" = $2, "ResolvedAt" = now()
+				WHERE "TargetType" = 0 AND "TargetId" = $1 AND "Kind" = 0 AND "Status" = 0`, id, ident.UserID); err != nil {
+				return err
+			}
+		case "Pending":
+			if _, err := tx.Exec(txCtx, `UPDATE "Images" SET "ReviewStatus" = 0 WHERE "Id" = $1`, id); err != nil {
+				return err
+			}
+		}
+		if replacement != nil {
+			if _, err := tx.Exec(txCtx, `
+				UPDATE "Images" SET "Extension" = $1, "PerceptualHash" = $2, "DominantColor" = $3,
+					"IsAnimated" = $4, "Width" = $5, "Height" = $6, "ByteSize" = $7
+				WHERE "Id" = $8`,
+				replacement.ext, hashToBits(replacement.hash), replacement.dominant, replacement.info.IsAnimated,
+				replacement.info.Width, replacement.info.Height, int64(len(replacement.data)), id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		if replacement != nil {
+			if imageGone || newKey != imageKey(id, rowExt) {
+				s.objects.remove(ctx, newKey)
+			} else {
+				s.log.Error("image file replaced but the metadata update failed; repeat the edit to fix it", "imageId", id, "error", err)
+			}
+		}
+		s.writeDomainError(w, r, err)
 		return
 	}
 
-	if replacedFile {
-		if _, err := replFile.Seek(0, io.SeekStart); err != nil {
-			InternalError(w, r, s.log, err)
-			return
+	if replacement != nil {
+		s.cdn.purge([]string{newKey})
+		if oldKey := imageKey(id, rowExt); oldKey != newKey {
+			s.objects.remove(ctx, oldKey)
 		}
-		if err := s.s3.Upload(r.Context(), fmt.Sprintf("%d%s", id, newExt), replFile, newByteSize, newContentType); err != nil {
-			InternalError(w, r, s.log, err)
-			return
-		}
-		if oldExt != "" && oldExt != newExt {
-			_ = s.s3.Delete(r.Context(), fmt.Sprintf("%d%s", id, oldExt))
-		}
-		s.purgeCDN([]string{fmt.Sprintf("%d%s", id, newExt), fmt.Sprintf("%d%s", id, oldExt)})
 	}
+	unlock()
+	finishDetached()
 
-	var row imageRow
-	err = s.db.QueryRow(r.Context(), `
-		SELECT "Id","PerceptualHash","Extension","DominantColor","Source","UploaderId","UploadedAt",
-			"IsNsfw","IsAnimated","Width","Height","ByteSize","ReviewStatus"
-		FROM "Images" WHERE "Id" = $1`, id).
-		Scan(&row.ID, &row.PerceptualHash, &row.Extension, &row.DominantColor, &row.Source, &row.UploaderID,
-			&row.UploadedAt, &row.IsNsfw, &row.IsAnimated, &row.Width, &row.Height, &row.ByteSize, &row.ReviewStatus)
+	row, err := s.loadImageRow(ctx, s.db, id)
 	if err != nil {
 		InternalError(w, r, s.log, err)
 		return
 	}
-	dto, err := s.assembleImageDto(r.Context(), row, ident, "All", false, nil, true)
+	dto, err := s.hydrateImage(ctx, s.db, row, hydrateOptions{ident: ident, childrenReviewStatus: "All", showUploader: true})
 	if err != nil {
 		InternalError(w, r, s.log, err)
 		return
 	}
-	dto.Favorites = 0
-	dto.LikedAt = nil
 	writeJSON(w, http.StatusOK, dto)
 }
 
 func (s *Server) handleDeleteImage(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	id, err := parseID(r.PathValue("id"))
 	if err != nil {
 		RouteNotFound(w, r)
@@ -1104,31 +1126,26 @@ func (s *Server) handleDeleteImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var ext string
-	err = s.db.QueryRow(r.Context(), `SELECT "Extension" FROM "Images" WHERE "Id" = $1`, id).Scan(&ext)
-	if errors.Is(err, pgx.ErrNoRows) {
-		NotFound(w, r, fmt.Sprintf("Image with ID %d not found.", id))
-		return
-	}
+	err = pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT "Extension" FROM "Images" WHERE "Id" = $1 FOR UPDATE`, id).Scan(&ext); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return errNotFound(fmt.Sprintf("Image with ID %d not found.", id))
+			}
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE "Reports" SET "Status" = 1, "ReviewerNote" = 'The reported image was deleted by a moderator.'
+			WHERE "ImageId" = $1 AND "Status" = 0`, id); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `DELETE FROM "Images" WHERE "Id" = $1`, id)
+		return err
+	})
 	if err != nil {
-		InternalError(w, r, s.log, err)
+		s.writeDomainError(w, r, err)
 		return
 	}
 
-	_, _ = s.db.Exec(r.Context(), `
-		UPDATE "Reports" SET "Status" = 1, "ReviewerNote" = 'The reported image was deleted by a moderator.'
-		WHERE "ImageId" = $1 AND "Status" = 0`, id)
-
-	if err := s.s3.Delete(r.Context(), fmt.Sprintf("%d%s", id, ext)); err != nil {
-		InternalError(w, r, s.log, err)
-		return
-	}
-
-	_, err = s.db.Exec(r.Context(), `DELETE FROM "Images" WHERE "Id" = $1`, id)
-	if err != nil {
-		InternalError(w, r, s.log, err)
-		return
-	}
-
-	s.purgeCDN([]string{fmt.Sprintf("%d%s", id, ext)})
+	s.removeStoredImage(ctx, imageKey(id, ext))
 	w.WriteHeader(http.StatusNoContent)
 }

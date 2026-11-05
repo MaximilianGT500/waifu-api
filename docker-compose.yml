@@ -9,21 +9,124 @@ services:
     environment:
       # In Docker the redirect target is always the public frontend URL.
       - DISCORD_REDIRECT_URI=${FRONTEND_URL:-http://localhost:5173}/auth/callback
+      # Shared rate limits for all instances (see the valkey service below).
+      - REDIS_URL=redis://waifu:${VALKEY_PASSWORD:?Set VALKEY_PASSWORD in .env}@valkey:6379/0
+      # The gateway decides the client address (TRUSTED_PROXIES / REAL_IP_HEADER from .env apply there); the API
+      # instances only trust the gateway, which always sends exactly one X-Forwarded-For entry.
+      - TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7,127.0.0.0/8,::1/128
+      - REAL_IP_HEADER=
     volumes:
       # Serve the checked-in OpenAPI spec at /openapi/v1.json (+ Scalar UI at /scalar).
       - ./openapi/WaifuApi.Web.json:/app/openapi.json:ro
-    ports:
-      - "${BACKEND_PORT}:8080"
+    # Several API instances behind the gateway below; they coordinate through PostgreSQL and Valkey.
+    deploy:
+      replicas: ${BACKEND_REPLICAS:-2}
     depends_on:
       db:
         condition: service_healthy
+      valkey:
+        condition: service_healthy
     restart: always
+    # Shutdown: 3 s to leave the load balancer, up to 20 s to drain requests, 15 s for running uploads and the
+    # statistics flush, 5 s for the database pools.
+    stop_grace_period: 50s
+    # The API never writes to its filesystem; large multipart uploads are buffered in /tmp.
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 20s
+    networks:
+      - api
+      - data
+
+  # Load balancer for the API instances; the only published API port. It is also the trust boundary for client
+  # addresses: deploy/gateway/entrypoint.sh turns TRUSTED_PROXIES and REAL_IP_HEADER into nginx real-IP rules.
+  gateway:
+    image: nginx:stable-alpine
+    entrypoint: ["/bin/sh", "/etc/nginx/gateway/entrypoint.sh"]
+    command: ["nginx", "-g", "daemon off;"]
+    environment:
+      GATEWAY_MAX_BODY_SIZE: ${GATEWAY_MAX_BODY_SIZE:-16m}
+      GATEWAY_MAX_CONNECTIONS_PER_CLIENT: ${GATEWAY_MAX_CONNECTIONS_PER_CLIENT:-64}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      REAL_IP_HEADER: ${REAL_IP_HEADER:-}
+    volumes:
+      - ./deploy/gateway/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./deploy/gateway/entrypoint.sh:/etc/nginx/gateway/entrypoint.sh:ro
+    # If your TLS proxy runs on this host, publish on localhost only: "127.0.0.1:${BACKEND_PORT}:8080".
+    ports:
+      - "${BACKEND_PORT}:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: always
+    read_only: true
+    tmpfs:
+      - /etc/nginx/conf.d
+      # Request bodies are buffered here before they reach an API instance; the size caps the memory they can use.
+      - /var/cache/nginx:size=256m
+      - /var/run
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/__gateway/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    networks:
+      - api
+
+  # Shared rate limit counters. No persistence (the counters expire within seconds) and a restricted ACL user:
+  # the API may only run its rate limit script on keys below "waifu:".
+  valkey:
+    image: valkey/valkey:9.1-alpine
+    command:
+      - valkey-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 64mb
+      - --maxmemory-policy
+      - volatile-ttl
+      - --user
+      - default
+      - "off"
+      - --user
+      - waifu
+      - "on"
+      - ">${VALKEY_PASSWORD:?Set VALKEY_PASSWORD in .env}"
+      - "~waifu:*"
+      - "+ping"
+      - "+eval"
+      - "+evalsha"
+      - "+get"
+      - "+set"
+      - "+time"
+    environment:
+      VALKEY_PASSWORD: ${VALKEY_PASSWORD:?Set VALKEY_PASSWORD in .env}
+    restart: always
+    read_only: true
+    tmpfs:
+      - /data
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli --user waifu --pass \"$$VALKEY_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - data
 
   frontend:
     build:
@@ -49,12 +152,21 @@ services:
       VITE_IMG_PREVIEW_WIDTH: "${IMG_PREVIEW_WIDTH:-1280}"
       # Version shown in the UI (sidebar); set VERSION in .env or via tag.
       VITE_APP_VERSION: "${VERSION:-0.0.0}"
+      # Content-Security-Policy: the SPA may only connect to itself, the API and the CDN (image downloads).
+      CDN_BASE_URL: "${CDN_BASE_URL:-}"
+      # Optional extra CSP sources (space separated), e.g. a separate image resizing host.
+      CSP_CONNECT_SRC: "${CSP_CONNECT_SRC:-}"
+      CSP_IMG_SRC: "${CSP_IMG_SRC:-}"
     ports:
       - "${FRONTEND_PORT}:80"
     depends_on:
-      backend:
+      gateway:
         condition: service_healthy
     restart: always
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - web
 
   docs:
     build:
@@ -74,6 +186,10 @@ services:
     ports:
       - "${DOCS_PORT}:80"
     restart: always
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - web
 
   db:
     image: pgvector/pgvector:pg18
@@ -84,13 +200,22 @@ services:
     volumes:
       - ./postgres_data:/var/lib/postgresql
     restart: always
-    # ports:
-    #   - "${POSTGRES_PORT_EXTERNAL}:5432"
+    # Only the API instances can reach the database (internal network). For a shell use
+    # "docker compose exec db psql -U <user> <database>"; to publish the port for local tools, also add the "api"
+    # network and "ports: ['127.0.0.1:${POSTGRES_PORT_EXTERNAL}:5432']".
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - data
 
-volumes:
-  postgres_data:
+networks:
+  # Frontend and docs: static sites, no access to the API containers, the database or Valkey.
+  web: {}
+  # Gateway and API instances (with internet access for Discord, the storage and the CDN API).
+  api: {}
+  # Database and Valkey: reachable from the API instances only, no internet access.
+  data:
+    internal: true

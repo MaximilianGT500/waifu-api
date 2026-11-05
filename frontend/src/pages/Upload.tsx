@@ -1,35 +1,53 @@
-﻿import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback, useId } from 'react';
 import { useForm } from 'react-hook-form';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import api from '../services/api';
 import SearchableSelect from '../components/SearchableSelect';
-import { UploadCloud, Info, Loader2 } from 'lucide-react';
+import { ImageUp, Info, Loader2, X } from 'lucide-react';
 import { useNotification } from '../context/NotificationContext';
 import TagModal from '../components/modals/TagModal';
 import ArtistModal from '../components/modals/ArtistModal';
 import { useMetadata } from '../hooks/useMetadata';
-import { ImageDto, Role } from '../types';
+import { usePermissions } from '../hooks/useBanner';
+import { ImageDto, ReviewStatus, Role } from '../types';
 import { useRequireAuth } from '../hooks/useRequireAuth';
 import { getEnv } from '../utils/env';
+import ExternalLink from '../components/ExternalLink';
+import { MetaTags } from '../hooks/useMetaTags';
+import { safeExternalUrl } from '../utils/safeUrl';
+import { acceptedTypes, checkImageFile, describeTypes, firstImageFile, formatBytes, ImageFileInfo } from '../utils/imageFile';
 
 interface UploadForm {
-  file: FileList;
   source: string;
   isNsfw: boolean;
 }
 
 const Upload = () => {
   const user = useRequireAuth();
-  const { register, handleSubmit, watch, formState: { errors } } = useForm<UploadForm>();
+  const { register, handleSubmit, formState: { errors } } = useForm<UploadForm>({ defaultValues: { source: '', isNsfw: false } });
   const navigate = useNavigate();
   const { showNotification } = useNotification();
+  const { uploadLimits } = usePermissions();
 
+  const [file, setFile] = useState<File | null>(null);
+  const [fileInfo, setFileInfo] = useState<ImageFileInfo | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [isChecking, setIsChecking] = useState(false);
+  const [submitAttempted, setSubmitAttempted] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [progress, setProgress] = useState<number | null>(null);
   const [agreedToTos, setAgreedToTos] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragDepth = useRef(0);
+  const checkSeq = useRef(0);
+  const fileHintId = useId();
+  const sourceId = useId();
 
-  const tosUrl = getEnv('VITE_TOS_URL');
+  const tosUrl = safeExternalUrl(getEnv('VITE_TOS_URL'));
   const isReviewMode = !(user?.role === Role.Moderator || user?.role === Role.Admin);
+  const types = acceptedTypes(uploadLimits);
 
   const {
       selectedTags, setSelectedTags,
@@ -43,141 +61,322 @@ const Upload = () => {
       slugify
   } = useMetadata({ isReviewMode });
 
-  const fileList = watch('file');
+  useEffect(() => {
+    if (!file) {
+      setPreviewUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  const selectFile = useCallback(async (candidate: File | null) => {
+    if (!candidate) return;
+    const seq = ++checkSeq.current;
+    setIsChecking(true);
+    const { error, info } = await checkImageFile(candidate, uploadLimits);
+    if (seq !== checkSeq.current) return;
+    setIsChecking(false);
+    if (error) {
+      setFile(null);
+      setFileInfo(null);
+      setFileError(error);
+      return;
+    }
+    setFileError(null);
+    setFile(candidate);
+    setFileInfo(info);
+  }, [uploadLimits]);
+
+  const clearFile = () => {
+    checkSeq.current++;
+    setFile(null);
+    setFileInfo(null);
+    setFileError(null);
+    setIsChecking(false);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
   useEffect(() => {
-    if (fileList && fileList.length > 0) {
-      const url = URL.createObjectURL(fileList[0]);
-      setPreviewUrl(url);
-      return () => URL.revokeObjectURL(url);
-    } else {
-      setPreviewUrl(null);
-    }
-  }, [fileList]);
+    const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
+    const prevent = (e: DragEvent) => {
+      if (hasFiles(e)) e.preventDefault();
+    };
+    const onPaste = (e: ClipboardEvent) => {
+      if (isUploading) return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+      const pasted = firstImageFile(e.clipboardData?.files);
+      if (pasted) {
+        e.preventDefault();
+        selectFile(pasted);
+      }
+    };
+    window.addEventListener('dragover', prevent);
+    window.addEventListener('drop', prevent);
+    window.addEventListener('paste', onPaste);
+    return () => {
+      window.removeEventListener('dragover', prevent);
+      window.removeEventListener('drop', prevent);
+      window.removeEventListener('paste', onPaste);
+    };
+  }, [selectFile, isUploading]);
 
   const onSubmit = async (data: UploadForm) => {
-    setIsUploading(true);
-    const formData = new FormData();
-    formData.append('file', data.file[0]);
+    setSubmitAttempted(true);
+    if (!file || isChecking || isUploading) return;
+    if (tosUrl && !agreedToTos) return;
+    if (uploadLimits && selectedTags.length > uploadLimits.maxTags) {
+      showNotification('warning', `An image can have at most ${uploadLimits.maxTags} tags.`);
+      return;
+    }
+    if (uploadLimits && selectedArtists.length > uploadLimits.maxArtists) {
+      showNotification('warning', `An image can have at most ${uploadLimits.maxArtists} artists.`);
+      return;
+    }
 
-    // Updated keys: tags (slugs) and artists (ids)
+    setIsUploading(true);
+    setProgress(0);
+    const formData = new FormData();
+    formData.append('file', file);
+
     selectedTags.forEach(tag => formData.append('tags', tag.slug || slugify(tag.name.trim())));
     selectedArtists.forEach(artist => formData.append('artists', String(artist.id)));
 
-    if (data.source) formData.append('source', data.source.trim());
-    formData.append('isNsfw', String(data.isNsfw));
+    const source = data.source.trim();
+    if (source) formData.append('source', source);
+    formData.append('isNsfw', String(!!data.isNsfw));
 
     try {
-      const { data: uploadedImage } = await api.post<ImageDto>('/images/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
-      showNotification(isReviewMode ? 'info' : 'success', isReviewMode ? 'Upload pending review.' : 'Image uploaded!');
-      // A pending upload goes to the submitter's queue (Images tab); an auto-approved one to the live image.
-      navigate(isReviewMode ? '/review?type=Image' : `/images/${uploadedImage.id}`);
-    } catch (e) { 
-        // showNotification('error', 'Upload failed'); // Handled globally
-        setIsUploading(false);
+      const { data: uploadedImage } = await api.post<ImageDto>('/images/upload', formData, {
+        onUploadProgress: (event) => {
+          if (event.total) setProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+        },
+      });
+      const pending = uploadedImage.reviewStatus === ReviewStatus.Pending;
+      showNotification(pending ? 'info' : 'success', pending ? 'Upload pending review.' : 'Image uploaded!');
+      navigate(pending ? '/review?type=Image' : `/images/${uploadedImage.id}`);
+    } catch {
+      setIsUploading(false);
+      setProgress(null);
     }
   };
 
   if (!user) return null;
 
+  const missingFile = submitAttempted && !file && !fileError;
+  const limitsHint = [
+    describeTypes(types),
+    uploadLimits ? `up to ${uploadLimits.maxFileSizeMb} MB` : null,
+    uploadLimits ? `at least ${uploadLimits.minWidth}×${uploadLimits.minHeight} px` : null,
+  ].filter(Boolean) as string[];
+
+  const dropZoneClasses = isDragging
+      ? 'border-brand bg-brand-soft ring-4 ring-brand/15'
+      : fileError || missingFile
+          ? 'border-destructive/60 bg-destructive/5'
+          : previewUrl
+              ? 'border-transparent bg-sleeve'
+              : 'border-input/45 bg-sleeve hover:border-brand/60';
+
   return (
-      <div className="max-w-5xl mx-auto p-4 md:p-8">
-        {/* Review Notice */}
-        <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-4 mb-8 flex items-start gap-3">
-          <Info className="text-blue-500 shrink-0 mt-0.5" size={20} />
+      <div className="page">
+        <MetaTags title="Upload" description="Upload a new image to the collection." />
+        <div className="page-header">
           <div>
-            <h4 className="font-bold text-blue-600 dark:text-blue-400 text-sm">Review Process</h4>
-            <p className="text-sm text-muted-foreground mt-1">
-              New uploads require review approval before appearing publicly.
-            </p>
+            <h1 className="page-title">Upload Image</h1>
+            <p className="page-lede">Add an illustration to the collection. Credit the artist and link the original source.</p>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          <div className="order-2 lg:order-1">
-            <label className={`flex flex-col items-center justify-center w-full h-[500px] border-2 border-dashed rounded-2xl cursor-pointer transition-all duration-300 relative overflow-hidden group ${previewUrl ? 'border-primary bg-card' : 'border-border bg-secondary/30 hover:bg-secondary/50 hover:border-primary/50'}`}>
-              {previewUrl ? (
-                  <>
-                    <img src={previewUrl} className="w-full h-full object-contain p-2" alt="Preview" />
-                    <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white font-medium">Click to change image</div>
-                  </>
-              ) : (
-                  <div className="text-center p-6 text-muted-foreground">
-                    <UploadCloud size={32} className="mx-auto mb-4" />
-                    <p className="text-lg font-medium text-foreground">Click or drag image here</p>
-                    <p className="text-sm mt-1">Supports PNG, JPG, GIF</p>
-                  </div>
-              )}
-              <input type="file" accept="image/*" {...register('file', { required: true })} className="hidden" />
-            </label>
-            {errors.file && <p className="text-destructive text-center mt-2 font-medium">Image is required.</p>}
+        {isReviewMode && (
+          <div className="mb-8 flex items-start gap-3 rounded-[var(--radius-panel)] bg-info/10 p-4">
+            <Info className="mt-0.5 shrink-0 text-info" size={18} aria-hidden="true" />
+            <div>
+              <h2 className="text-sm font-bold">Uploads are reviewed</h2>
+              <p className="mt-0.5 text-sm text-muted-foreground">
+                New uploads may require review approval before appearing publicly.
+              </p>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 items-start gap-8 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)] xl:gap-12">
+          <div className="lg:sticky lg:top-6">
+            <div
+              onDragEnter={(e) => {
+                e.preventDefault();
+                dragDepth.current += 1;
+                setIsDragging(true);
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'copy';
+              }}
+              onDragLeave={() => {
+                dragDepth.current = Math.max(0, dragDepth.current - 1);
+                if (dragDepth.current === 0) setIsDragging(false);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                dragDepth.current = 0;
+                setIsDragging(false);
+                if (!isUploading) selectFile(firstImageFile(e.dataTransfer.files));
+              }}
+            >
+              <label
+                className={`group relative flex h-[22rem] w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[1.5rem] border-2 border-dashed shadow-[inset_0_1px_3px_rgb(9_9_11/0.1)] transition-[border-color,background-color,box-shadow] duration-200 focus-within:ring-4 focus-within:ring-brand/25 sm:h-[30rem] ${dropZoneClasses}`}
+              >
+                {previewUrl ? (
+                    <>
+                      <img src={previewUrl} className="size-full object-contain p-4 drop-shadow-[0_10px_18px_rgb(9_9_11/0.25)]" alt="Preview of the selected file" />
+                      <span className="absolute inset-x-6 bottom-4 rounded-full bg-zinc-950/70 px-3 py-2 text-center text-sm font-bold text-white opacity-0 backdrop-blur-md transition-opacity group-hover:opacity-100" aria-hidden="true">
+                        Click or drop to change the image
+                      </span>
+                    </>
+                ) : (
+                    <span className="flex flex-col items-center px-6 text-center">
+                      <span className="mb-6 grid aspect-[5/7] w-20 rotate-[-4deg] place-items-center rounded-2xl bg-card text-brand-ink shadow-card transition-transform duration-300 group-hover:rotate-0" aria-hidden="true">
+                        {isChecking
+                          ? <Loader2 size={26} className="animate-spin" />
+                          : <ImageUp size={26} strokeWidth={2} />}
+                      </span>
+                      <span className="text-lg font-bold text-foreground">{isDragging ? 'Drop the image here' : 'Click, drop or paste an image'}</span>
+                      <span id={fileHintId} className="mt-2 max-w-sm text-sm text-muted-foreground">
+                        {limitsHint.join(', ')}
+                      </span>
+                    </span>
+                )}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept={types.join(',')}
+                  disabled={isUploading}
+                  aria-describedby={fileHintId}
+                  aria-invalid={!!fileError || missingFile}
+                  onChange={(e) => {
+                    selectFile(e.target.files?.[0] ?? null);
+                    e.target.value = '';
+                  }}
+                  className="sr-only"
+                />
+              </label>
+            </div>
+
+            {file && (
+              <div className="mt-3 flex items-center justify-between gap-3 text-sm text-muted-foreground">
+                <p className="flex min-w-0 flex-wrap gap-x-3" title={file.name}>
+                  <span className="truncate font-bold text-foreground">{file.name}</span>
+                  <span className="tabular">{formatBytes(file.size)}</span>
+                  {fileInfo && <span className="tabular">{fileInfo.width} × {fileInfo.height}</span>}
+                </p>
+                <button type="button" onClick={clearFile} disabled={isUploading} className="btn btn-ghost btn-sm shrink-0">
+                  <X size={14} aria-hidden="true" /> Remove
+                </button>
+              </div>
+            )}
+            {fileError && <p role="alert" className="field-error text-center">{fileError}</p>}
+            {missingFile && <p role="alert" className="field-error text-center">Please choose an image.</p>}
           </div>
 
-          <div className="order-1 lg:order-2 space-y-6">
-            <h1 className="text-3xl font-black mb-2">Upload Image</h1>
-            <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
-              <div className="space-y-4">
-                <SearchableSelect
-                    label="Artists"
-                    placeholder="Search artists..."
-                    loadOptions={loadArtists}
-                    selectedOptions={selectedArtists}
-                    onSelect={(o) => setSelectedArtists(p => p.some(a => a.id === o.id) ? p : [...p, o])}
-                    onRemove={(o) => setSelectedArtists(p => p.filter(a => a.id !== o.id))}
-                    onCreate={(name) => { setNewArtistName(name.trim()); setShowCreateArtistModal(true); }}
-                    isMulti={true}
-                />
-                <SearchableSelect
-                    label="Tags"
-                    placeholder="Add tags..."
-                    loadOptions={loadTags}
-                    selectedOptions={selectedTags}
-                    onSelect={(o) => setSelectedTags(p => p.some(t => t.id === o.id) ? p : [...p, o])}
-                    onRemove={(o) => setSelectedTags(p => p.filter(t => t.id !== o.id))}
-                    onCreate={(name) => { setNewTagName(name.trim()); setShowCreateTagModal(true); }}
-                    isMulti={true}
-                />
-                <div>
-                  <label className="block text-sm font-medium mb-1.5">Source URL</label>
-                  <input type="url" {...register('source')} className="w-full p-3 rounded-lg bg-secondary border-transparent focus:ring-2 focus:ring-primary outline-none transition-all" placeholder="https://pixiv.net/..." />
-                </div>
-                <label className="flex items-center gap-3 p-4 border border-border rounded-xl cursor-pointer hover:bg-secondary/50 transition-colors">
-                  <input type="checkbox" {...register('isNsfw')} className="w-5 h-5 rounded text-destructive focus:ring-destructive" />
-                  <div><span className="block font-bold">NSFW Content</span><span className="text-xs text-muted-foreground">Contains adult material</span></div>
-                </label>
-              </div>
+          <form onSubmit={handleSubmit(onSubmit, () => setSubmitAttempted(true))} className="panel space-y-6 p-5 sm:p-7" noValidate>
+            <SearchableSelect
+                label="Artists"
+                placeholder="Search artists…"
+                loadOptions={loadArtists}
+                selectedOptions={selectedArtists}
+                onSelect={(o) => setSelectedArtists(p => p.some(a => a.id === o.id) ? p : [...p, o])}
+                onRemove={(o) => setSelectedArtists(p => p.filter(a => a.id !== o.id))}
+                onCreate={(name) => { setNewArtistName(name.trim()); setShowCreateArtistModal(true); }}
+                isMulti={true}
+            />
+            <SearchableSelect
+                label="Tags"
+                placeholder="Add tags…"
+                loadOptions={loadTags}
+                selectedOptions={selectedTags}
+                onSelect={(o) => setSelectedTags(p => p.some(t => t.id === o.id) ? p : [...p, o])}
+                onRemove={(o) => setSelectedTags(p => p.filter(t => t.id !== o.id))}
+                onCreate={(name) => { setNewTagName(name.trim()); setShowCreateTagModal(true); }}
+                isMulti={true}
+            />
+            <div>
+              <label htmlFor={sourceId} className="field-label">Source URL</label>
+              <input
+                id={sourceId}
+                type="url"
+                inputMode="url"
+                autoComplete="off"
+                spellCheck={false}
+                {...register('source', {
+                  validate: (value) => {
+                    const v = value.trim();
+                    if (!v) return true;
+                    if ([...v].length > 500) return 'The source URL must not exceed 500 characters.';
+                    return !!safeExternalUrl(v) || 'Please enter a valid http(s) URL.';
+                  },
+                })}
+                aria-invalid={!!errors.source}
+                aria-describedby={errors.source ? `${sourceId}-error` : `${sourceId}-hint`}
+                className="input"
+                placeholder="https://www.pixiv.net/artworks/…"
+              />
+              {errors.source
+                ? <p id={`${sourceId}-error`} role="alert" className="field-error">{errors.source.message}</p>
+                : <p id={`${sourceId}-hint`} className="field-hint">Where the artwork was first published.</p>}
+            </div>
+
+            <div className="space-y-3">
+              <label className="grid cursor-pointer grid-cols-[auto_1fr] items-start gap-x-3 rounded-2xl border-[1.5px] border-border p-4 transition-colors hover:bg-secondary/60 has-[:checked]:border-destructive/40 has-[:checked]:bg-destructive/5">
+                <input type="checkbox" {...register('isNsfw')} className="row-span-2 mt-0.5 size-[1.125rem] shrink-0 accent-brand" />
+                <span className="text-sm font-bold">NSFW Content</span>
+                <span className="col-start-2 text-sm text-muted-foreground">Contains adult material</span>
+              </label>
               {tosUrl && (
-                <label className="flex items-start gap-3 p-4 border border-border rounded-xl cursor-pointer hover:bg-secondary/50 transition-colors">
+                <label className="flex cursor-pointer items-start gap-3 rounded-2xl border-[1.5px] border-border p-4 transition-colors hover:bg-secondary/60">
                   <input
                     type="checkbox"
                     checked={agreedToTos}
                     onChange={e => setAgreedToTos(e.target.checked)}
-                    className="w-5 h-5 rounded text-primary focus:ring-primary mt-0.5"
+                    className="mt-0.5 size-[1.125rem] shrink-0 accent-brand"
                   />
                   <span className="text-sm text-muted-foreground">
                     By uploading, I agree to the{' '}
-                    <a href={tosUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline font-medium">
+                    <ExternalLink href={tosUrl} trusted className="font-bold text-brand-ink hover:underline">
                       Terms of Service
-                    </a>
+                    </ExternalLink>
                   </span>
                 </label>
               )}
+            </div>
+
+            <div className="space-y-3">
               <button
                 type="submit"
-                disabled={isUploading || (!!tosUrl && !agreedToTos)}
-                className="w-full py-4 rounded-xl bg-foreground text-background font-bold text-lg hover:opacity-90 transition-all shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={isUploading || isChecking || (!!tosUrl && !agreedToTos)}
+                aria-busy={isUploading}
+                className="btn btn-primary btn-lg w-full"
               >
                 {isUploading ? (
                     <>
-                        <Loader2 size={20} className="animate-spin" />
-                        Uploading...
+                        <Loader2 size={18} className="animate-spin" aria-hidden="true" />
+                        {progress !== null && progress < 100 ? `Uploading… ${progress}%` : 'Processing…'}
                     </>
                 ) : (
-                    "Upload Now"
+                    'Upload Now'
                 )}
               </button>
-            </form>
-          </div>
+              {isUploading && progress !== null && (
+                <progress
+                  value={progress}
+                  max={100}
+                  aria-label="Upload progress"
+                  className="block h-1.5 w-full appearance-none overflow-hidden rounded-full bg-secondary [&::-moz-progress-bar]:bg-brand [&::-webkit-progress-bar]:bg-secondary [&::-webkit-progress-value]:bg-brand [&::-webkit-progress-value]:transition-[width]"
+                />
+              )}
+            </div>
+          </form>
         </div>
 
         <TagModal
@@ -200,7 +399,7 @@ const Upload = () => {
             submitLabel="Create"
         />
       </div>
-  )
-}
+  );
+};
 
 export default Upload;

@@ -1,4 +1,5 @@
-import { AlertTriangle } from 'lucide-react';
+import { useEffect, useRef } from 'react';
+import { ShieldAlert } from 'lucide-react';
 
 interface NsfwWarningProps {
     variant: 'overlay' | 'modal';
@@ -7,51 +8,42 @@ interface NsfwWarningProps {
 }
 
 const NsfwWarning = ({ variant, onConsent, onDecline }: NsfwWarningProps) => {
+    const consentRef = useRef<HTMLButtonElement>(null);
+
+    useEffect(() => {
+        if (variant === 'modal') consentRef.current?.focus({ preventScroll: true });
+    }, [variant]);
+
     if (variant === 'overlay') {
         return (
-            <div className="absolute inset-0 bg-background/95 backdrop-blur-xl flex items-center justify-center p-4 z-10">
-                <div className="text-center max-w-sm">
-                    <AlertTriangle size={48} className="text-destructive mx-auto mb-4" />
-                    <h3 className="text-2xl font-bold mb-2">NSFW Content</h3>
-                    <p className="text-muted-foreground mb-6">This content is flagged as 18+.</p>
-                    <div className="flex gap-3 justify-center">
-                        <button
-                            onClick={onConsent}
-                            className="bg-primary text-primary-foreground px-6 py-2.5 rounded-lg font-bold hover:bg-primary/90 transition-colors"
-                        >
-                            Show Content
-                        </button>
-                        <button
-                            onClick={onDecline}
-                            className="bg-secondary px-6 py-2.5 rounded-lg font-bold hover:bg-secondary/80 transition-colors"
-                        >
-                            Go Back
-                        </button>
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/90 p-6 backdrop-blur-2xl">
+                <div className="max-w-sm text-center">
+                    <span className="mx-auto mb-4 grid size-14 place-items-center rounded-full bg-destructive/12 text-destructive" aria-hidden="true">
+                        <ShieldAlert size={28} strokeWidth={1.8} />
+                    </span>
+                    <h2 className="text-2xl font-black">NSFW Content</h2>
+                    <p className="mt-2 text-muted-foreground">This image is marked as 18+.</p>
+                    <div className="mt-6 flex justify-center gap-3">
+                        <button type="button" onClick={onConsent} className="btn btn-primary">Show Content</button>
+                        <button type="button" onClick={onDecline} className="btn btn-secondary">Go Back</button>
                     </div>
                 </div>
             </div>
         );
     }
 
-    // Modal variant (fullscreen)
     return (
-        <div className="fixed inset-0 z-[60] bg-black/90 flex items-center justify-center p-4 backdrop-blur-xl">
-            <div className="bg-card p-8 rounded-2xl max-w-sm w-full text-center border border-border shadow-2xl">
-                <AlertTriangle size={48} className="text-destructive mx-auto mb-4" />
-                <h2 className="text-2xl font-black mb-2">Age Restricted</h2>
-                <p className="text-muted-foreground mb-6">This content is intended for adults only.</p>
-                <button
-                    onClick={onConsent}
-                    className="w-full py-3 bg-primary text-primary-foreground rounded-xl font-bold mb-2 hover:bg-primary/90 transition-colors"
-                >
-                    I am 18+
-                </button>
-                <button
-                    onClick={onDecline}
-                    className="w-full py-3 bg-secondary rounded-xl font-bold hover:bg-secondary/80 transition-colors"
-                >
-                    Go Back
-                </button>
+        <div className="fixed inset-0 z-60 flex items-center justify-center bg-zinc-950/85 p-4 backdrop-blur-xl">
+            <div role="alertdialog" aria-modal="true" aria-labelledby="nsfw-title" aria-describedby="nsfw-text" className="w-full max-w-sm rounded-[var(--radius-sheet)] bg-card p-7 text-center shadow-float dark:ring-1 dark:ring-white/8">
+                <span className="mx-auto mb-4 grid size-14 place-items-center rounded-full bg-destructive/12 text-destructive" aria-hidden="true">
+                    <ShieldAlert size={28} strokeWidth={1.8} />
+                </span>
+                <h2 id="nsfw-title" className="text-2xl font-black">Age Restricted</h2>
+                <p id="nsfw-text" className="mt-2 text-muted-foreground">This content is intended for adults only.</p>
+                <div className="mt-6 grid gap-2">
+                    <button ref={consentRef} type="button" onClick={onConsent} className="btn btn-primary btn-lg">I am 18+</button>
+                    <button type="button" onClick={onDecline} className="btn btn-ghost btn-lg">Go Back</button>
+                </div>
             </div>
         </div>
     );
