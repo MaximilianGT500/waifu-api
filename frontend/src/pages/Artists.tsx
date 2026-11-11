@@ -145,7 +145,7 @@ const Artists = () => {
                             <div className="min-w-0 flex-1">
                                 <h2 className="text-lg font-black leading-snug">
                                     <Link
-                                        to={`/gallery?includedArtists=${artist.id}`}
+                                        to={`/artists/${artist.id}`}
                                         className="block truncate outline-none after:absolute after:inset-0"
                                         title={`View images by ${artist.name}`}
                                     >
@@ -262,7 +262,7 @@ const Artists = () => {
                 title="Artist Details"
                 footer={infoArtist && (
                     <div className="flex justify-end">
-                        <Link to={`/gallery?includedArtists=${infoArtist.id}`} className="btn btn-primary">
+                        <Link to={`/artists/${infoArtist.id}`} className="btn btn-primary">
                             View images
                         </Link>
                     </div>

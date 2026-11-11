@@ -55,10 +55,12 @@ const Privacy = () => {
                     <h2 className="section-title mb-2">4. Local Storage and Cookies in Your Browser</h2>
                     <p className="text-muted-foreground leading-relaxed">
                         This website stores data locally in your browser (localStorage/sessionStorage): your
-                        sign-in token, your display preferences (theme, accent color, animations, NSFW consent, dismissed banners) and
-                        short-lived technical values used for the login. Apart from the sign-in token, which is
-                        sent to the API to authenticate your requests, this data never leaves your browser. It
-                        is deleted when you sign out or clear your browser storage.
+                        sign-in token, your display preferences (theme, accent color, animations, NSFW consent, dismissed banners,
+                        tag view, blurred NSFW previews, slideshow speed, preferred code language), your saved searches, the images you opened recently (shown under “Recently viewed” on the
+                        home page, where you can remove them), the list you opened an image from (for this tab only, to step
+                        through it) and short-lived technical values used for the login. Apart from the sign-in token, which is
+                        sent to the API to authenticate your requests, this data never leaves your browser. The sign-in token
+                        is deleted when you sign out; everything else when you clear your browser storage.
                     </p>
                     <p className="mt-3 text-muted-foreground leading-relaxed">
                         If you switch the design (Collector or Classic), your choice is stored in a cookie named

@@ -37,6 +37,12 @@
   } catch {}
 
   try {
+    if (localStorage.getItem('blur-nsfw') === 'on') {
+      document.documentElement.setAttribute('data-blur-nsfw', '');
+    }
+  } catch {}
+
+  try {
     var env = window.env || {};
     var seen = {};
     [[env.VITE_API_URL, 'anonymous'], [env.VITE_CDN_ORIGIN, null]].forEach(function (entry) {

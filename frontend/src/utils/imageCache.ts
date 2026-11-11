@@ -6,4 +6,5 @@ export function patchCachedImage(queryClient: QueryClient, id: number, patch: Pa
         if (!old || !Array.isArray(old.items) || !old.items.some((item) => item.id === id)) return old;
         return { ...old, items: old.items.map((item) => (item.id === id ? { ...item, ...patch } : item)) };
     });
+    queryClient.setQueriesData<ImageDto>({ queryKey: ['image', String(id)] }, (old) => (old ? { ...old, ...patch } : old));
 }

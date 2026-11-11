@@ -49,13 +49,27 @@ error formats, review semantics and even the quirks of the old API are reproduce
 - 👯 **Duplicate Detection** – 64-bit perceptual hashing with Hamming-distance comparison (bit-exact port of the
   original `CoenM.ImageHash` algorithm, so hashes stay comparable across the rewrite).
 - 📊 **Statistics** – public counters plus an admin dashboard (requests, top users, top uploaders, history).
+- ⌨️ **Quick search & shortcuts** – <kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>K</kbd> (or <kbd>/</kbd>) jumps to tags, artists,
+  images by number and pages; <kbd>?</kbd> lists all keyboard shortcuts (page through the gallery with the arrow keys,
+  step through the images of a list, full-screen viewer, slideshow, …).
+- 🧩 **API snippets** – every gallery, album and image page shows the matching API request as URL, cURL,
+  JavaScript or Python, with the active filters applied.
+- 🖼️ **Image pages** – previous/next through the whole result list an image was opened from (further pages load on
+  the way), full-screen viewer with original-size zoom and a slideshow (3/5/10 s), share menu (link, image URL,
+  copy the image itself, Markdown, BBCode, native share) and “More by this artist”.
+- 🗂️ **Browsing** – artist pages (`/artists/{id}`, with profile links) and tag pages (`/tags/{slug}`, with the
+  description), each with the full gallery and its filters; removable active-filter chips; saved searches (stored
+  in the browser, also in the quick search); optional blurring of NSFW previews; “Recently viewed” and “Browse by
+  tag” on the home page.
 - 🎴 **Two designs** – the *Collector* design (binder pages with nine card pockets, holo cards, card detail
   pages, in the colours of the previous design) and the previous *Classic* design; six accent colours to choose
   from, and animations and effects can be switched off. Visitors switch in the theme menu; the choice is kept in the
   `waifu_design` cookie and the frontend's nginx serves the matching build on every URL.
 - ⚡ **Performance** – CDN integration with on-the-fly image resizing and single-image cache purging, short-lived
   in-memory caches for public lists with ETag/304 revalidation and cluster-wide invalidation, batched database
-  queries, subsetted self-hosted fonts and responsive images.
+  queries, subsetted self-hosted fonts and responsive images. In the browser: the next gallery page and hovered
+  images are fetched ahead of time, image pages open instantly from list data, filter inputs are debounced, the
+  libraries live in long-cached vendor chunks and all assets are precompressed (gzip -9, served with `gzip_static`).
 - 🔐 **Security** – hashed API keys, strict OAuth state nonce, database-authoritative roles & bans, per-IP rate
   limiting with trusted-proxy handling, decompression-bomb protection, Content-Security-Policy, configurable CORS
   (allowlist, optionally fully open) and security headers. See [Security](#-security).
@@ -221,6 +235,13 @@ and utilities; only components, pages and styles differ, and each page loads onl
   HTML from the frontend container.
 - `npm run dev` and `npm run preview` honour the cookie as well.
 - The cookie is described on the privacy page of both designs. It is only set after a visitor picks a design.
+- Quick search, keyboard shortcuts, the active-filter bar, saved searches, API snippets, artist and tag pages, the
+  full-screen viewer with slideshow, previous/next navigation, related images, NSFW blurring and “Recently viewed”
+  are part of the Collector design; the shared performance work (debounced filters, lazily resolved filter names,
+  next-page prefetching, subsetted fonts) benefits both.
+- The menu's **Blur NSFW previews** switch is stored in `localStorage` and applied by `public/init.js` before the
+  first paint (`html[data-blur-nsfw]`); cards, related images and “Recently viewed” mark NSFW previews with
+  `data-nsfw`.
 
 ## 🔑 Setting up an admin user
 

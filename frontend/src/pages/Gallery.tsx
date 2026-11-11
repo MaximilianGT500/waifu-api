@@ -59,6 +59,8 @@ const Gallery = () => {
                 setPageSize={setPageSize}
                 searchParams={searchParams}
                 setSearchParams={setSearchParams}
+                totalCount={paginatedImages?.totalCount}
+                apiRequest={{ path: '/images', defaults: { pageSize: String(pageSize) } }}
                 emptyState={
                     <EmptyState
                         isCheckingAlternatives={isCheckingAlternatives}

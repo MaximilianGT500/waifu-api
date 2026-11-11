@@ -12,6 +12,7 @@ const FilterToggleButton = ({ isOpen, onToggle, className = '' }: FilterToggleBu
         onClick={onToggle}
         aria-expanded={isOpen}
         aria-label={isOpen ? 'Hide filters' : 'Show filters'}
+        title={isOpen ? 'Hide filters (F)' : 'Show filters (F)'}
         className={`btn ${isOpen ? 'bg-brand-soft text-brand-ink ring-1 ring-brand/30 hover:bg-brand-soft' : 'btn-secondary'} ${className}`}
     >
         <SlidersHorizontal size={16} aria-hidden="true" />

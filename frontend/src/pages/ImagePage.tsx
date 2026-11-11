@@ -1,9 +1,12 @@
-import { useState, useEffect, useEffectEvent, useRef, ReactNode } from 'react';
+import { useState, useEffect, ReactNode, CSSProperties } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { useParams, useNavigate, Link } from 'react-router';
-import api from '../services/api';
-import { ImageDto, Role, ImageFormData, ReviewStatus, ReviewStatusFilter, ReviewableContentType } from '../types';
-import { Heart, Trash2, Edit, FolderPlus, Flag, Image, GitPullRequest, Clock, Plus, Download, Link2, Check } from 'lucide-react';
+import { useParams, useNavigate, useLocation, Link } from 'react-router';
+import api, { httpStatus } from '../services/api';
+import { ImageDto, Role, ImageFormData, ReviewStatus, ReviewableContentType } from '../types';
+import {
+  Heart, Trash2, Edit, FolderPlus, Flag, Image, GitPullRequest, Clock, Plus, Download, Link2, Check,
+  Share2, Braces, Maximize2, ChevronLeft, ChevronRight, ArrowLeft, ImageOff, Code2, MessageSquareCode, Send, Play, Copy,
+} from 'lucide-react';
 import { useMyPendingImageEdits } from '../hooks/useMyPendingImageEdits';
 import { invalidateNavBadges } from '../hooks/useNavBadges';
 import { useAuth } from '../context/AuthContext';
@@ -11,11 +14,17 @@ import { useNotification } from '../context/NotificationContext';
 import { useNsfwConsent } from '../hooks/useNsfwConsent';
 import { useImageUpdate } from '../hooks/useImageUpdate';
 import { useAuthGuard } from '../hooks/useRequireAuth';
+import { useImageDetail, imageDetailKey, prefetchImageDetail } from '../hooks/useImageDetail';
+import { useHotkeys } from '../hooks/useHotkeys';
 import ImageModal from '../components/modals/ImageModal';
 import ConfirmModal from '../components/modals/ConfirmModal';
 import ReasonModal from '../components/modals/ReasonModal';
 import AlbumSelectionModal from '../components/modals/AlbumSelectionModal';
+import ApiRequestDialog from '../components/modals/ApiRequestDialog';
 import NsfwWarning from '../components/NsfwWarning';
+import Lightbox from '../components/Lightbox';
+import RelatedImages from '../components/RelatedImages';
+import { Dropdown, DropdownTrigger, DropdownItem, DropdownSeparator } from '../components/Dropdown';
 import NotFound from './NotFound';
 import { MetaTags } from '../hooks/useMetaTags';
 import { isBot } from '../utils/bot';
@@ -26,6 +35,14 @@ import { safeColor } from '../utils/color';
 import { nowIso } from '../utils/time';
 import { isId } from '../utils/ids';
 import { useHolo } from '../hooks/useHolo';
+import { imgCard, imgPreview, imgPreviewSrcSet } from '../utils/cfImage';
+import { patchCachedImage } from '../utils/imageCache';
+import { copyText } from '../utils/clipboard';
+import { extendBrowseContext, neighboursOf } from '../utils/browseContext';
+import { useBrowseContext } from '../hooks/useBrowseContext';
+import { addRecentImage, removeRecentImage } from '../utils/recentImages';
+
+const DETAIL_SIZES = '(min-width: 1280px) min(56vw, 62rem), (min-width: 1024px) 60vw, 100vw';
 
 const StatRow = ({ label, children }: { label: string; children: ReactNode }) => (
   <div className="flex min-w-0 items-center justify-between gap-4 py-3">
@@ -34,26 +51,52 @@ const StatRow = ({ label, children }: { label: string; children: ReactNode }) =>
   </div>
 );
 
+const formatBytes = (bytes: number) => {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+};
+
 const ImagePage = () => {
   const { id } = useParams<{ id: string }>();
   if (!isId(id)) return <NotFound />;
   return <ImageView id={id} />;
 };
 
+const preloadDetailImage = (image: ImageDto, original: boolean) => {
+  const url = safeExternalUrl(image.url);
+  if (!url || image.isNsfw) return;
+  const preload = new window.Image();
+  preload.decoding = 'async';
+  if (original) {
+    preload.src = url;
+    return;
+  }
+  const srcSet = imgPreviewSrcSet(url, image.width);
+  if (srcSet) {
+    preload.sizes = DETAIL_SIZES;
+    preload.srcset = srcSet;
+  }
+  preload.src = imgPreview(url);
+};
+
 const ImageView = ({ id }: { id: string }) => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const wantsSlideshow = !!(location.state as { slideshow?: boolean } | null)?.slideshow;
   const { user } = useAuth();
   const { showNotification } = useNotification();
   const checkAuth = useAuthGuard();
   const queryClient = useQueryClient();
   const { data: pendingEdits } = useMyPendingImageEdits(!!user);
 
-  const [image, setImage] = useState<ImageDto | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [notFound, setNotFound] = useState(false);
+  const detail = useImageDetail(id);
+  const image = detail.data ?? null;
+  const loadStatus = httpStatus(detail.error);
+  const notFound = loadStatus === 404 || loadStatus === 400;
 
-  const { showWarning: showNsfwWarning, setShowWarning: setShowNsfwWarning, grantConsent, hasConsent } = useNsfwConsent(false);
+  const { grantConsent, hasConsent } = useNsfwConsent(false);
+  const [consented, setConsented] = useState(() => hasConsent() || isBot());
   const { updateImage } = useImageUpdate();
 
   const [showEditModal, setShowEditModal] = useState(false);
@@ -61,22 +104,125 @@ const ImageView = ({ id }: { id: string }) => {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [isAlbumModalOpen, setIsAlbumModalOpen] = useState(false);
-  const [linkCopied, setLinkCopied] = useState(false);
+  const [isApiOpen, setIsApiOpen] = useState(false);
+  const [isViewerOpen, setIsViewerOpen] = useState(wantsSlideshow);
+  const [autoPlay, setAutoPlay] = useState(wantsSlideshow);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
   const [isLiking, setIsLiking] = useState(false);
-  const requestSeq = useRef(0);
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+  const [brokenSrc, setBrokenSrc] = useState<string | null>(null);
+  const browse = useBrowseContext();
   const holo = useHolo<HTMLDivElement>(4);
 
+  const numericId = Number(id);
+  const nav = neighboursOf(browse, numericId);
   const isAdminOrModerator = user && (user.role === Role.Admin || user.role === Role.Moderator);
+  const pageUrl = `${window.location.origin}/images/${id}`;
+  const needsConsent = !!image?.isNsfw && !consented;
 
-  const handleCopyLink = async () => {
+  useEffect(() => {
+    if (image && !detail.isPlaceholderData) addRecentImage(image);
+  }, [image, detail.isPlaceholderData]);
+
+  useEffect(() => {
+    if (notFound) removeRecentImage(numericId);
+  }, [notFound, numericId]);
+
+  const nextId = nav?.next;
+  const prevId = nav?.prev;
+  useEffect(() => {
+    if (!nextId && !prevId) return;
+    const handle = window.setTimeout(() => {
+      if (nextId) {
+        void prefetchImageDetail(queryClient, nextId, user).then(() => {
+          const next = queryClient.getQueryData<ImageDto>(imageDetailKey(nextId, user?.id));
+          if (next) preloadDetailImage(next, isViewerOpen);
+        });
+      }
+      if (prevId) void prefetchImageDetail(queryClient, prevId, user);
+    }, 250);
+    return () => window.clearTimeout(handle);
+  }, [nextId, prevId, queryClient, user, isViewerOpen]);
+
+  const nearEnd = !!nav && nav.moreNext && nav.index >= (browse?.ids.length ?? 0) - 3;
+  const nearStart = !!nav && nav.morePrev && nav.index <= 2;
+  useEffect(() => {
+    if (nearEnd) void extendBrowseContext('next');
+    if (nearStart) void extendBrowseContext('prev');
+  }, [nearEnd, nearStart]);
+
+  useEffect(() => {
+    if (wantsSlideshow) navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+  }, [wantsSlideshow, navigate, location.pathname, location.search]);
+
+  const openViewer = (play: boolean) => {
+    setAutoPlay(play);
+    setIsViewerOpen(true);
+  };
+
+  const goTo = (target?: number) => {
+    if (!target) return false;
+    navigate(`/images/${target}`, { replace: true });
+  };
+
+  useHotkeys({
+    ArrowLeft: () => goTo(prevId),
+    ArrowRight: () => goTo(nextId),
+    f: () => {
+      if (!image || needsConsent) return false;
+      openViewer(false);
+    },
+    s: () => {
+      if (!image || needsConsent || !nav) return false;
+      openViewer(true);
+    },
+  });
+
+  const flashCopied = (key: string) => {
+    setCopiedKey(key);
+    window.setTimeout(() => setCopiedKey((current) => (current === key ? null : current)), 2000);
+  };
+
+  const copy = async (key: string, text: string, message: string) => {
+    if (await copyText(text)) {
+      flashCopied(key);
+      showNotification('success', message);
+    } else {
+      showNotification('error', 'Could not copy to the clipboard');
+    }
+  };
+
+  const handleCopyImage = async () => {
+    const url = image ? safeExternalUrl(image.url) : undefined;
+    if (!url) return;
+    const png = (async () => {
+      const res = await fetch(url, { mode: 'cors', credentials: 'omit' });
+      if (!res.ok) throw new Error('fetch failed');
+      const blob = await res.blob();
+      if (blob.type === 'image/png') return blob;
+      const bitmap = await createImageBitmap(blob);
+      const canvas = document.createElement('canvas');
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      canvas.getContext('2d')?.drawImage(bitmap, 0, 0);
+      bitmap.close();
+      return new Promise<Blob>((resolve, reject) => canvas.toBlob((out) => (out ? resolve(out) : reject(new Error('encode failed'))), 'image/png'));
+    })();
     try {
-      await navigator.clipboard.writeText(window.location.href);
-      setLinkCopied(true);
-      showNotification('success', 'Link copied to clipboard');
-      setTimeout(() => setLinkCopied(false), 2000);
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
+      flashCopied('image');
+      showNotification('success', 'Image copied to clipboard');
     } catch {
-      showNotification('error', 'Could not copy the link');
+      showNotification('error', 'Could not copy the image');
+    }
+  };
+
+  const handleNativeShare = async () => {
+    if (!image) return;
+    try {
+      await navigator.share({ title: `Image #${image.id}`, url: pageUrl });
+    } catch {
     }
   };
 
@@ -109,48 +255,26 @@ const ImageView = ({ id }: { id: string }) => {
     }
   };
 
-  const fetchImage = async (silent = false) => {
-    const seq = ++requestSeq.current;
-    try {
-      if (!silent) { setIsLoading(true); setError(null); setNotFound(false); }
-      const params: Record<string, string> = {};
-      if (isAdminOrModerator) {
-        params.childrenReviewStatus = ReviewStatusFilter.All;
-      } else if (user) {
-        params.includeMyPendingChildren = 'true';
-      }
-      const { data } = await api.get<ImageDto>(`/images/${id}`, { params, skipGlobalErrorHandler: true });
-      if (seq !== requestSeq.current) return;
-      setImage(data);
-
-      if (data.isNsfw && !silent && !hasConsent() && !isBot()) {
-        setShowNsfwWarning(true);
-      }
-    } catch (err) {
-      if (seq !== requestSeq.current) return;
-      const status = (err as { response?: { status?: number } })?.response?.status;
-      if (status === 404 || status === 400) {
-        if (!silent) setNotFound(true);
-      } else {
-        if (!silent) setError("Failed to load image.");
-      }
-    } finally {
-      if (!silent && seq === requestSeq.current) setIsLoading(false);
-    }
+  const setImage = (updated: ImageDto) => {
+    queryClient.setQueryData(imageDetailKey(id, user?.id), updated);
+    patchCachedImage(queryClient, updated.id, {
+      likedAt: updated.likedAt,
+      favorites: updated.favorites,
+      albums: updated.albums,
+    });
   };
 
-  const loadImage = useEffectEvent(() => { fetchImage(); });
-
-  useEffect(() => {
-    loadImage();
-  }, [id, user?.id]);
+  const refreshSilently = () => queryClient.invalidateQueries({ queryKey: imageDetailKey(id, user?.id) });
 
   const handleDelete = async () => {
     try {
       await api.delete(`/images/${id}`);
+      removeRecentImage(numericId);
+      void queryClient.invalidateQueries({ queryKey: ['images'] });
       showNotification('success', 'Image deleted successfully');
       navigate('/gallery');
     } catch {
+      return;
     }
   };
 
@@ -158,15 +282,18 @@ const ImageView = ({ id }: { id: string }) => {
     if (!checkAuth('You must be logged in to like images.')) return;
     if (!image || isLiking) return;
     setIsLiking(true);
+    const liked = !!image.likedAt;
+    const patch = liked
+      ? { likedAt: undefined, favorites: image.favorites - 1, albums: (image.albums ?? []).filter((a) => !a.isDefault) }
+      : { likedAt: nowIso(), favorites: image.favorites + 1 };
     try {
-      if (image.likedAt) {
+      if (liked) {
         await api.delete(`/users/${user!.id}/albums/favorites/images/${image.id}`, { skipGlobalErrorHandler: true });
-        setImage(prev => prev ? { ...prev, likedAt: undefined, favorites: prev.favorites - 1 } : null);
       } else {
         await api.post(`/users/${user!.id}/albums/favorites/images/${image.id}`, {}, { skipGlobalErrorHandler: true });
-        setImage(prev => prev ? { ...prev, likedAt: nowIso(), favorites: prev.favorites + 1 } : null);
       }
-      fetchImage(true);
+      patchCachedImage(queryClient, image.id, patch);
+      void refreshSilently();
     } catch {
       showNotification('error', 'Could not update your favorites. Please try again.');
     } finally {
@@ -177,10 +304,11 @@ const ImageView = ({ id }: { id: string }) => {
   const handleSaveEdit = async (data: ImageFormData) => {
     if (!isAdminOrModerator || !image) return;
     const updatedImage = await updateImage(image.id, data);
-    setImage(updatedImage);
+    queryClient.setQueryData(imageDetailKey(id, user?.id), updatedImage);
+    void queryClient.invalidateQueries({ queryKey: ['images'] });
     setShowEditModal(false);
     showNotification('success', 'Image updated successfully');
-    fetchImage(true);
+    void refreshSilently();
   };
 
   const handleReport = async (description: string) => {
@@ -195,13 +323,19 @@ const ImageView = ({ id }: { id: string }) => {
     }
   };
 
+  const consent = () => {
+    grantConsent();
+    setConsented(true);
+  };
+
   const statusInfo: Record<ReviewStatus, { label: string; tone: StatusTone }> = {
       [ReviewStatus.Pending]: { label: 'Pending review', tone: 'pending' },
       [ReviewStatus.Accepted]: { label: 'Accepted', tone: 'success' },
       [ReviewStatus.Rejected]: { label: 'Rejected', tone: 'danger' },
   };
 
-  if (isLoading) {
+  if (notFound) return <NotFound />;
+  if (!image && detail.isPending) {
     return (
       <div className="page" role="status" aria-live="polite">
         <span className="sr-only">Loading…</span>
@@ -216,13 +350,12 @@ const ImageView = ({ id }: { id: string }) => {
       </div>
     );
   }
-  if (notFound) return <NotFound />;
-  if (error || !image) {
+  if (!image) {
     return (
       <div className="page flex min-h-[50vh] flex-col items-center justify-center text-center" role="alert">
-        <p className="font-bold">{error || 'Not Found'}</p>
+        <p className="font-bold">Failed to load image.</p>
         <p className="mt-1 text-sm text-muted-foreground">The server did not respond. Try again in a moment.</p>
-        <button type="button" onClick={() => fetchImage()} className="btn btn-secondary mt-5">
+        <button type="button" onClick={() => void detail.refetch()} className="btn btn-secondary mt-5">
           Try again
         </button>
       </div>
@@ -245,6 +378,15 @@ const ImageView = ({ id }: { id: string }) => {
   const tint = safeColor(image.dominantColor);
   const aspect = image.height > 0 ? Math.round((image.width / image.height) * 10000) / 10000 : 1;
   const status = statusInfo[image.reviewStatus] ?? { label: 'Unknown', tone: 'neutral' as StatusTone };
+  const altText = artistNames ? `Image #${image.id} by ${artistNames}` : `Image #${image.id}`;
+  const previewSrc = imgPreview(image.url);
+  const lowResSrc = imgCard(image.url);
+  const showLowRes = lowResSrc !== previewSrc && loadedSrc !== previewSrc;
+  const isBroken = brokenSrc === previewSrc;
+  const format = image.extension.replace(/^\./, '').toUpperCase() || '—';
+  const canShare = typeof navigator.share === 'function';
+  const canCopyImage = typeof ClipboardItem !== 'undefined' && typeof navigator.clipboard?.write === 'function' && !image.isAnimated;
+  const position = nav ? `${nav.position.toLocaleString()} of ${nav.total.toLocaleString()}` : undefined;
 
   const entityChip = (opts: {
     key: string; name: string; entityHref: string; galleryHref: string; galleryTitle: string;
@@ -273,6 +415,7 @@ const ImageView = ({ id }: { id: string }) => {
   };
 
   const secondaryAction = 'btn btn-secondary btn-icon';
+  const stepButton = 'grid size-9 place-items-center rounded-full text-foreground transition-colors hover:bg-secondary disabled:pointer-events-none disabled:opacity-35';
 
   return (
       <div className="page">
@@ -285,7 +428,29 @@ const ImageView = ({ id }: { id: string }) => {
           type="article"
           isNsfw={image.isNsfw}
         />
-        <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_23rem] xl:grid-cols-[minmax(0,1fr)_25rem] xl:gap-12">
+
+        {nav && (
+          <nav aria-label="Browse the list" className="-mt-2 mb-5 flex flex-wrap items-center justify-between gap-3">
+            <Link to={browse!.from} className="btn btn-ghost btn-sm -ml-3">
+              <ArrowLeft size={15} aria-hidden="true" /> Back to the list
+            </Link>
+            <div className="flex items-center gap-1 rounded-full bg-card p-1 shadow-card dark:ring-1 dark:ring-white/6">
+              <button type="button" onClick={() => openViewer(true)} disabled={needsConsent} className={stepButton} aria-label="Play a slideshow (S)" title="Slideshow (S)">
+                <Play size={16} aria-hidden="true" />
+              </button>
+              <span className="h-5 w-px bg-border" aria-hidden="true" />
+              <button type="button" onClick={() => goTo(prevId)} disabled={!prevId} className={stepButton} aria-label="Previous image (←)" title="Previous image (←)">
+                <ChevronLeft size={17} aria-hidden="true" />
+              </button>
+              <span className="px-2 text-sm font-bold text-muted-foreground tabular">{position}</span>
+              <button type="button" onClick={() => goTo(nextId)} disabled={!nextId} className={stepButton} aria-label="Next image (→)" title="Next image (→)">
+                <ChevronRight size={17} aria-hidden="true" />
+              </button>
+            </div>
+          </nav>
+        )}
+
+        <div className="grid grid-cols-1 items-start gap-8 lg:grid-cols-[minmax(0,1fr)_23rem] xl:grid-cols-[minmax(0,1fr)_25rem] xl:gap-12">
           <div
             className="sleeve relative flex min-h-72 items-center justify-center overflow-hidden p-3 sm:p-6 lg:p-8"
             style={tint ? { backgroundColor: `color-mix(in oklab, ${tint} 22%, var(--sleeve))` } : undefined}
@@ -293,25 +458,57 @@ const ImageView = ({ id }: { id: string }) => {
             <div
               onPointerMove={holo.onPointerMove}
               onPointerLeave={holo.onPointerLeave}
-              className="holo-card relative max-w-full rounded-[1.4rem] bg-card p-2 shadow-lift sm:p-2.5 dark:ring-1 dark:ring-white/8"
+              className="holo-card group relative max-w-full rounded-[1.4rem] bg-card p-2 shadow-lift sm:p-2.5 dark:ring-1 dark:ring-white/8"
               style={{ width: `min(100%, calc(min(76vh, 62rem) * ${aspect} + 1.25rem))` }}
             >
-              <img
-                  src={image.url}
-                  alt={artistNames ? `Image #${image.id} by ${artistNames}` : `Image #${image.id}`}
-                  width={image.width}
-                  height={image.height}
-                  decoding="async"
-                  fetchPriority="high"
-                  className="block h-auto w-full rounded-[1rem]"
-              />
+              <div
+                className="relative overflow-hidden rounded-[1rem]"
+                style={{ aspectRatio: `${image.width} / ${image.height}`, backgroundColor: tint ?? undefined } as CSSProperties}
+              >
+                {needsConsent ? null : isBroken ? (
+                  <span className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-sleeve text-sm font-bold text-muted-foreground">
+                    <ImageOff size={24} aria-hidden="true" /> Image unavailable
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => openViewer(false)}
+                    className="absolute inset-0 block size-full cursor-zoom-in outline-none"
+                    aria-label="Open full screen (F)"
+                    title="Open full screen (F)"
+                  >
+                    {showLowRes && (
+                      <img src={lowResSrc} alt="" aria-hidden="true" decoding="async" className="absolute inset-0 size-full scale-105 object-cover blur-md" />
+                    )}
+                    <img
+                        key={previewSrc}
+                        src={previewSrc}
+                        srcSet={imgPreviewSrcSet(image.url, image.width)}
+                        sizes={DETAIL_SIZES}
+                        alt={altText}
+                        width={image.width}
+                        height={image.height}
+                        decoding="async"
+                        fetchPriority="high"
+                        onLoad={() => setLoadedSrc(previewSrc)}
+                        onError={() => setBrokenSrc(previewSrc)}
+                        className="relative block size-full object-cover"
+                    />
+                  </button>
+                )}
+              </div>
               <span className="holo-foil" aria-hidden="true" />
+              {!needsConsent && !isBroken && (
+                <span className="pointer-events-none absolute bottom-4 right-4 grid size-9 place-items-center rounded-full bg-zinc-950/55 text-white opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100 group-focus-within:opacity-100" aria-hidden="true">
+                  <Maximize2 size={16} />
+                </span>
+              )}
             </div>
 
-            {image.isNsfw && showNsfwWarning && (
+            {needsConsent && (
                 <NsfwWarning
                     variant="overlay"
-                    onConsent={grantConsent}
+                    onConsent={consent}
                     onDecline={() => window.history.length > 1 ? navigate(-1) : navigate('/gallery')}
                 />
             )}
@@ -326,7 +523,7 @@ const ImageView = ({ id }: { id: string }) => {
               {artistNames && <p className="mt-2 text-muted-foreground">by <span className="font-bold text-foreground">{artistNames}</span></p>}
             </div>
 
-            <div className="flex flex-wrap gap-2">
+            <div className="flex gap-2">
               <button
                   type="button"
                   onClick={handleLike}
@@ -345,10 +542,11 @@ const ImageView = ({ id }: { id: string }) => {
                       if (!checkAuth('You must be logged in to add images to albums.')) return;
                       setIsAlbumModalOpen(true);
                   }}
-                  className="btn btn-primary flex-1"
+                  aria-label="Add to Album"
+                  className="btn btn-primary min-w-0 flex-1 px-4"
               >
                   <FolderPlus size={17} className="shrink-0" aria-hidden="true" />
-                  <span className="truncate">Add to Album</span>
+                  <span className="truncate" aria-hidden="true"><span className="min-[400px]:hidden">Album</span><span className="hidden min-[400px]:inline">Add to Album</span></span>
               </button>
 
               <button
@@ -362,14 +560,39 @@ const ImageView = ({ id }: { id: string }) => {
                   <Download size={17} className={isDownloading ? 'animate-pulse' : ''} aria-hidden="true" />
               </button>
 
+              <Dropdown
+                  width="w-60"
+                  label="Share this image"
+                  trigger={
+                      <DropdownTrigger className={secondaryAction}>
+                          {copiedKey ? <Check size={17} className="text-success" aria-hidden="true" /> : <Share2 size={17} aria-hidden="true" />}
+                      </DropdownTrigger>
+                  }
+              >
+                  <DropdownItem onClick={() => copy('link', pageUrl, 'Link copied to clipboard')} icon={<Link2 size={16} />}>Copy page link</DropdownItem>
+                  <DropdownItem onClick={() => copy('url', image.url, 'Image URL copied to clipboard')} icon={<Image size={16} />}>Copy image URL</DropdownItem>
+                  {canCopyImage && (
+                      <DropdownItem onClick={handleCopyImage} icon={<Copy size={16} />}>Copy image</DropdownItem>
+                  )}
+                  <DropdownSeparator />
+                  <DropdownItem onClick={() => copy('md', `[![${altText}](${image.url})](${pageUrl})`, 'Markdown copied to clipboard')} icon={<Code2 size={16} />}>Copy as Markdown</DropdownItem>
+                  <DropdownItem onClick={() => copy('bb', `[url=${pageUrl}][img]${image.url}[/img][/url]`, 'BBCode copied to clipboard')} icon={<MessageSquareCode size={16} />}>Copy as BBCode</DropdownItem>
+                  {canShare && (
+                      <>
+                          <DropdownSeparator />
+                          <DropdownItem onClick={handleNativeShare} icon={<Send size={16} />}>Share…</DropdownItem>
+                      </>
+                  )}
+              </Dropdown>
+
               <button
                   type="button"
-                  onClick={handleCopyLink}
-                  aria-label={linkCopied ? 'Link copied' : 'Copy link to this image'}
-                  title="Copy link to this image"
+                  onClick={() => setIsApiOpen(true)}
+                  aria-label="Use this image in the API"
+                  title="Use this image in the API"
                   className={secondaryAction}
               >
-                  {linkCopied ? <Check size={17} className="text-success" aria-hidden="true" /> : <Link2 size={17} aria-hidden="true" />}
+                  <Braces size={17} aria-hidden="true" />
               </button>
             </div>
 
@@ -387,8 +610,21 @@ const ImageView = ({ id }: { id: string }) => {
                 </div>
               </dl>
               <dl className="divide-y-2 divide-dashed divide-border border-t-2 border-dashed border-border">
-                <StatRow label="File size">{(image.byteSize / (1024 * 1024)).toFixed(2)} MB</StatRow>
+                <StatRow label="File">{format} · {formatBytes(image.byteSize)}</StatRow>
                 <StatRow label="Uploaded">{new Date(image.uploadedAt).toLocaleDateString()}</StatRow>
+                {tint && (
+                  <StatRow label="Dominant color">
+                    <button
+                      type="button"
+                      onClick={() => copy('color', tint, `${tint} copied to clipboard`)}
+                      title="Copy the color"
+                      className="inline-flex items-center gap-2 rounded-full px-1.5 py-0.5 font-mono transition-colors hover:bg-secondary"
+                    >
+                      <span className="size-3.5 rounded-full ring-1 ring-border" style={{ backgroundColor: tint }} aria-hidden="true" />
+                      {tint}
+                    </button>
+                  </StatRow>
+                )}
                 <StatRow label="Status"><StatusBadge label={status.label} tone={status.tone} /></StatRow>
                 {image.source && (
                   <StatRow label="Source">
@@ -416,7 +652,7 @@ const ImageView = ({ id }: { id: string }) => {
                     return entityChip({
                       key: `artist-${artist.id}`,
                       name: artist.name,
-                      entityHref: `/artists?includedIds=${artist.id}`,
+                      entityHref: `/artists/${artist.id}`,
                       galleryHref: `/gallery?includedArtists=${artist.id}`,
                       galleryTitle: 'View images by this artist',
                       removed, pending,
@@ -426,7 +662,7 @@ const ImageView = ({ id }: { id: string }) => {
                 {addedArtists.map(a => entityChip({
                     key: `add-artist-${a.id}`,
                     name: a.name,
-                    entityHref: `/artists?includedIds=${a.id}`,
+                    entityHref: `/artists/${a.id}`,
                     galleryHref: `/gallery?includedArtists=${a.id}`,
                     galleryTitle: 'View images by this artist',
                     added: true,
@@ -448,7 +684,7 @@ const ImageView = ({ id }: { id: string }) => {
                     return entityChip({
                       key: `tag-${tag.id}`,
                       name: tag.name,
-                      entityHref: `/tags?includedIds=${tag.id}`,
+                      entityHref: `/tags/${encodeURIComponent(tag.slug)}`,
                       galleryHref: `/gallery?includedTags=${encodeURIComponent(tag.slug)}`,
                       galleryTitle: 'View images with this tag',
                       removed, pending,
@@ -458,7 +694,7 @@ const ImageView = ({ id }: { id: string }) => {
                 {addedTags.map(t => entityChip({
                     key: `add-tag-${t.id}`,
                     name: t.name,
-                    entityHref: `/tags?includedIds=${t.id}`,
+                    entityHref: `/tags/${encodeURIComponent(t.slug)}`,
                     galleryHref: `/gallery?includedTags=${encodeURIComponent(t.slug)}`,
                     galleryTitle: 'View images with this tag',
                     added: true,
@@ -503,6 +739,31 @@ const ImageView = ({ id }: { id: string }) => {
             </div>
           </div>
         </div>
+
+        {!needsConsent && <RelatedImages image={image} allowNsfw={consented} />}
+
+        {isViewerOpen && !needsConsent && (
+            <Lightbox
+                url={image.url}
+                alt={altText}
+                width={image.width}
+                height={image.height}
+                placeholder={tint ?? undefined}
+                position={position}
+                autoPlay={autoPlay}
+                canContinue={!!nav?.moreNext}
+                onClose={() => setIsViewerOpen(false)}
+                onPrev={prevId ? () => goTo(prevId) : undefined}
+                onNext={nextId ? () => goTo(nextId) : undefined}
+            />
+        )}
+
+        <ApiRequestDialog
+            isOpen={isApiOpen}
+            onClose={() => setIsApiOpen(false)}
+            path={`/images/${image.id}`}
+            description="Fetch this image's record – URL, size, artists and tags – from the API."
+        />
 
         <ConfirmModal
             isOpen={isDeleteModalOpen}
@@ -551,7 +812,7 @@ const ImageView = ({ id }: { id: string }) => {
             isOpen={isAlbumModalOpen}
             onClose={() => setIsAlbumModalOpen(false)}
             image={image}
-            onUpdate={(updated) => setImage(updated)}
+            onUpdate={setImage}
         />
       </div>
   );

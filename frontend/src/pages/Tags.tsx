@@ -126,7 +126,7 @@ const Tags = () => {
                             <div className="flex min-w-0 items-start justify-between gap-2">
                                 <h2 className="sticker min-w-0 px-4 py-1.5 text-base font-black leading-snug">
                                     <Link
-                                        to={`/gallery?includedTags=${encodeURIComponent(tag.slug)}`}
+                                        to={`/tags/${encodeURIComponent(tag.slug)}`}
                                         className="block min-w-0 truncate outline-none after:absolute after:inset-0"
                                         title={`View images tagged ${tag.name}`}
                                     >
@@ -237,7 +237,7 @@ const Tags = () => {
                 title="Tag Details"
                 footer={infoTag && (
                     <div className="flex justify-end">
-                        <Link to={`/gallery?includedTags=${encodeURIComponent(infoTag.slug)}`} className="btn btn-primary">
+                        <Link to={`/tags/${encodeURIComponent(infoTag.slug)}`} className="btn btn-primary">
                             View images
                         </Link>
                     </div>

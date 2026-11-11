@@ -21,7 +21,7 @@ async function resolveInBatches<T, V extends string | number>(
             const params = new URLSearchParams({ pageSize: String(part.length) });
             part.forEach((v) => params.append(param, String(v)));
             try {
-                const { data } = await api.get<PaginatedList<T>>(`${endpoint}?${params.toString()}`, { skipGlobalErrorHandler: true });
+                const { data } = await api.get<PaginatedList<T>>(endpoint, { params, skipGlobalErrorHandler: true });
                 return data.items;
             } catch {
                 return [];

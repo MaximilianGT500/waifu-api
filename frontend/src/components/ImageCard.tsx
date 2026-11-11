@@ -7,13 +7,14 @@ import { useAuth } from '../context/AuthContext';
 import { useMyPendingImageEdits } from '../hooks/useMyPendingImageEdits';
 import { useAuthGuard } from '../hooks/useRequireAuth';
 import { useHolo } from '../hooks/useHolo';
-import { ReactNode, useState, MouseEvent } from 'react';
+import { ReactNode, useEffect, useRef, useState, MouseEvent } from 'react';
 import api from '../services/api';
 import AlbumSelectionModal from './modals/AlbumSelectionModal';
 import { imgCard, imgCardSrcSet } from '../utils/cfImage';
 import { safeColor } from '../utils/color';
 import { patchCachedImage } from '../utils/imageCache';
 import { nowIso } from '../utils/time';
+import { prefetchImageDetail } from '../hooks/useImageDetail';
 
 interface ImageCardProps {
     image: ImageDto;
@@ -26,7 +27,10 @@ interface ImageCardProps {
     forceOverlay?: boolean;
     readOnly?: boolean;
     showTags?: boolean;
+    onOpen?: () => void;
 }
+
+const INTENT_DELAY_MS = 90;
 
 export const CARD_SIZES = '(min-width: 1280px) 13rem, (min-width: 1024px) 16rem, (min-width: 640px) 30vw, 32vw';
 
@@ -50,7 +54,7 @@ const CornerSticker = ({ children, tone }: { children: ReactNode; tone: 'nsfw' |
 
 const TAG_CAP = 6;
 
-const ImageCard = ({ image, eager = false, priority = false, onDelete, onRemove, onEdit, onSuggest, forceOverlay = false, readOnly = false, showTags = false }: ImageCardProps) => {
+const ImageCard = ({ image, eager = false, priority = false, onDelete, onRemove, onEdit, onSuggest, forceOverlay = false, readOnly = false, showTags = false, onOpen }: ImageCardProps) => {
     const { user } = useAuth();
     const checkAuth = useAuthGuard();
     const queryClient = useQueryClient();
@@ -63,6 +67,19 @@ const ImageCard = ({ image, eager = false, priority = false, onDelete, onRemove,
     const [isImageLoaded, setIsImageLoaded] = useState(false);
     const [isImageBroken, setIsImageBroken] = useState(false);
     const [isAlbumModalOpen, setIsAlbumModalOpen] = useState(false);
+    const intentTimer = useRef<number | undefined>(undefined);
+
+    useEffect(() => () => window.clearTimeout(intentTimer.current), []);
+
+    const prefetchDetail = () => {
+        window.clearTimeout(intentTimer.current);
+        void prefetchImageDetail(queryClient, image.id, user);
+    };
+    const onPointerIntent = () => {
+        window.clearTimeout(intentTimer.current);
+        intentTimer.current = window.setTimeout(prefetchDetail, INTENT_DELAY_MS);
+    };
+    const cancelIntent = () => window.clearTimeout(intentTimer.current);
 
     if (syncedImage !== image) {
         setSyncedImage(image);
@@ -145,6 +162,12 @@ const ImageCard = ({ image, eager = false, priority = false, onDelete, onRemove,
             >
                 <Link
                     to={`/images/${image.id}`}
+                    onClick={onOpen}
+                    onPointerEnter={onPointerIntent}
+                    onPointerLeave={cancelIntent}
+                    onFocus={prefetchDetail}
+                    onTouchStart={prefetchDetail}
+                    data-nsfw={image.isNsfw ? '' : undefined}
                     className="relative block overflow-hidden rounded-[0.8rem] bg-sleeve outline-none"
                     style={{ aspectRatio: '5 / 7', backgroundColor: placeholder ?? undefined }}
                 >

@@ -5,9 +5,9 @@ import {
     Sun, Moon, Menu, X, LogOut, Upload as UploadIcon,
     Home, Image as ImageIcon, Tag as TagIcon,
     User as UserIcon, Library, ChevronDown, Palette, Key, Users as UsersIcon, Flag, BarChart, Monitor, HardDrive, GitPullRequest, Megaphone,
-    LucideIcon, Sparkles, History, WandSparkles,
+    LucideIcon, Sparkles, History, WandSparkles, Search, Info, Shield, Mail, EyeOff,
 } from 'lucide-react';
-import { useState, useEffect, useRef, Suspense, ReactNode, ButtonHTMLAttributes } from 'react';
+import { useState, useEffect, useRef, Suspense, ReactNode, ButtonHTMLAttributes, lazy } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import GlobalErrorHandler from '../GlobalErrorHandler';
 import { Dropdown, DropdownTrigger, DropdownItem, DropdownLabel, DropdownSeparator, DropdownSwatch } from '../Dropdown';
@@ -23,6 +23,12 @@ import SafeExternalLink from '../ExternalLink';
 import ErrorBoundary from '../ErrorBoundary';
 import PageLoader from '../PageLoader';
 import { safeExternalUrl } from '../../utils/safeUrl';
+import { useHotkeys, dialogOpen, modKeyLabel } from '../../hooks/useHotkeys';
+import { readNsfwBlur, setNsfwBlur } from '../../utils/nsfwBlur';
+import type { PaletteDestination } from '../CommandPalette';
+
+const CommandPalette = lazy(() => import('../CommandPalette'));
+const ShortcutsDialog = lazy(() => import('../ShortcutsDialog'));
 
 interface NavEntry {
     key: string;
@@ -122,6 +128,32 @@ const Layout = () => {
         };
     }, [isMobileMenuOpen]);
 
+    const [isPaletteOpen, setIsPaletteOpen] = useState(false);
+    const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+    const [modLabel] = useState(modKeyLabel);
+    const [blurNsfw, setBlurNsfw] = useState(readNsfwBlur);
+
+    const toggleBlurNsfw = () => {
+        setNsfwBlur(!blurNsfw);
+        setBlurNsfw(!blurNsfw);
+    };
+
+    useHotkeys({
+        'mod+k': () => {
+            if (isPaletteOpen) {
+                setIsPaletteOpen(false);
+                return;
+            }
+            if (dialogOpen()) return false;
+            setIsPaletteOpen(true);
+        },
+    }, { inDialogs: true });
+
+    useHotkeys({
+        '/': () => setIsPaletteOpen(true),
+        '?': () => setIsShortcutsOpen(true),
+    });
+
     const { pendingCount, reportCount } = useNavBadges();
     const queryClient = useQueryClient();
     useEffect(() => { invalidateNavBadges(queryClient); }, [location.pathname, queryClient]);
@@ -159,6 +191,31 @@ const Layout = () => {
     const isModOrAdmin = user && (user.role === Role.Moderator || user.role === Role.Admin);
     const isAdmin = user && user.role === Role.Admin;
     const { canManageBanner } = usePermissions();
+
+    const destinations: PaletteDestination[] = [
+        ...tabs,
+        ...(user ? [
+            { key: 'my-albums', to: '/albums', label: 'My Albums', icon: Library },
+            { key: 'api-keys', to: '/api-keys', label: 'API Keys', icon: Key },
+            ...(!isModOrAdmin ? [
+                { key: 'my-submissions', to: '/review', label: 'My Submissions', icon: GitPullRequest },
+                { key: 'my-reports', to: '/my-reports', label: 'My Reports', icon: Flag },
+            ] : []),
+        ] : [{ key: 'login', to: '/login', label: 'Log in', icon: UserIcon }]),
+        ...(canManageBanner ? [{ key: 'site-banner', to: '/site-banner', label: 'Site Banner', icon: Megaphone }] : []),
+        ...(isModOrAdmin ? [
+            { key: 'review', to: '/review', label: 'Review queue', icon: GitPullRequest },
+            { key: 'reports', to: '/reports', label: 'Reports', icon: Flag },
+        ] : []),
+        ...(isAdmin ? [
+            { key: 'users', to: '/users', label: 'User Management', icon: UsersIcon },
+            { key: 'stats', to: '/stats', label: 'Statistics', icon: BarChart },
+            { key: 'storage-diff', to: '/storage-diff', label: 'Storage Diff', icon: HardDrive },
+        ] : []),
+        { key: 'privacy', to: '/privacy', label: 'Privacy', icon: Shield },
+        { key: 'imprint', to: '/imprint', label: 'Imprint', icon: Info },
+        ...(showContact ? [{ key: 'contact', to: '/contact', label: 'Contact', icon: Mail }] : []),
+    ].filter((entry, index, all) => all.findIndex((other) => other.to === entry.to && other.label === entry.label) === index);
 
     const renderFooterLink = (link: FooterLink, className: string, onClick?: () => void) => link.href ? (
         <SafeExternalLink key={link.key} href={link.href} trusted onClick={onClick} className={className}>
@@ -202,6 +259,17 @@ const Layout = () => {
                     </div>
 
                     <div className="flex items-center gap-1.5 sm:gap-2">
+                        <button
+                            type="button"
+                            onClick={() => setIsPaletteOpen(true)}
+                            aria-label={`Quick search (${modLabel} K)`}
+                            aria-haspopup="dialog"
+                            className="grid size-10 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-card hover:text-foreground md:flex md:h-10 md:w-56 md:items-center md:justify-start md:gap-2.5 md:bg-card/70 md:px-4 md:text-sm md:font-bold md:shadow-card md:ring-1 md:ring-border/60 lg:w-64 dark:md:ring-white/6"
+                        >
+                            <Search size={18} aria-hidden="true" className="shrink-0" />
+                            <span className="hidden flex-1 text-left md:inline">Search…</span>
+                            <kbd className="hidden rounded-md border border-border px-1.5 py-px font-mono text-[0.6875rem] text-muted-foreground md:inline" aria-hidden="true">{modLabel} K</kbd>
+                        </button>
                         <Dropdown
                             width="w-[17rem]"
                             label="Change color theme, accent, design and effects"
@@ -237,6 +305,7 @@ const Layout = () => {
                             <div role="group" aria-label="Effects">
                                 <DropdownLabel>Effects</DropdownLabel>
                                 <DropdownItem checkbox onClick={() => setMotionEnabled(!motionEnabled)} active={motionEnabled} icon={<WandSparkles size={16} />}>Animations and effects</DropdownItem>
+                                <DropdownItem checkbox onClick={toggleBlurNsfw} active={blurNsfw} icon={<EyeOff size={16} />}>Blur NSFW previews</DropdownItem>
                             </div>
                         </Dropdown>
 
@@ -313,6 +382,19 @@ const Layout = () => {
                     </div>
                 </div>
             </header>
+
+            {(isPaletteOpen || isShortcutsOpen) && (
+                <Suspense fallback={null}>
+                    {isPaletteOpen && (
+                        <CommandPalette
+                            onClose={() => setIsPaletteOpen(false)}
+                            destinations={destinations}
+                            onShowShortcuts={() => setIsShortcutsOpen(true)}
+                        />
+                    )}
+                    {isShortcutsOpen && <ShortcutsDialog isOpen onClose={() => setIsShortcutsOpen(false)} />}
+                </Suspense>
+            )}
 
             {isMobileMenuOpen && (
                 <div className="fixed inset-0 z-50 lg:hidden">

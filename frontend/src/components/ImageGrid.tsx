@@ -1,8 +1,10 @@
 import { ReactNode } from 'react';
+import { useLocation } from 'react-router';
 import { ImageDto, Role } from '../types';
 import ImageCard from './ImageCard';
 import { RefreshCw, CloudOff } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { BrowseSource, saveBrowseContext } from '../utils/browseContext';
 
 export interface ImageGridProps {
     images: ImageDto[];
@@ -17,6 +19,7 @@ export interface ImageGridProps {
     forceOverlay?: boolean;
     readOnly?: boolean;
     showTags?: boolean;
+    browseSource?: BrowseSource;
 }
 
 const POCKETS = 9;
@@ -40,10 +43,14 @@ const ImageGrid = ({
     onEdit, onSuggest, onDelete, onRemove,
     emptyState, forceOverlay = false, readOnly = false,
     showTags = false,
+    browseSource,
 }: ImageGridProps) => {
     const { user } = useAuth();
     const isAdminOrModerator = user && (user.role === Role.Admin || user.role === Role.Moderator);
     const isAdmin = user && user.role === Role.Admin;
+    const location = useLocation();
+
+    const rememberList = () => saveBrowseContext({ ids: images.map((img) => img.id), from: `${location.pathname}${location.search}`, source: browseSource });
 
     if (isLoading) {
         return (
@@ -109,6 +116,7 @@ const ImageGrid = ({
                                 forceOverlay={forceOverlay}
                                 readOnly={readOnly}
                                 showTags={showTags}
+                                onOpen={rememberList}
                             />
                         ))}
                         {Array.from({ length: (COLUMNS - (sheet.length % COLUMNS)) % COLUMNS }, (_, k) => <EmptyPocket key={`empty-${k}`} />)}

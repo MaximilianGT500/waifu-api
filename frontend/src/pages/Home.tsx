@@ -13,6 +13,8 @@ import TagChip from '../components/TagChip';
 import { safeColor } from '../utils/color';
 import { useHolo } from '../hooks/useHolo';
 import { effectsEnabled } from '../utils/motion';
+import PopularTags from '../components/PopularTags';
+import RecentlyViewed from '../components/RecentlyViewed';
 
 interface PublicStats {
     totalRequests: number;
@@ -344,6 +346,9 @@ const Home = () => {
                         ))}
                     </dl>
                 )}
+
+                <RecentlyViewed />
+                <PopularTags />
             </section>
         </div>
     );

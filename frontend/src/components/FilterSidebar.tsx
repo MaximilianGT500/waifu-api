@@ -1,10 +1,12 @@
-import { useEffect, useState, useRef, useId } from 'react';
+import { useState, useId } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import SearchableSelect, { Option } from './SearchableSelect';
 import api from '../services/api';
 import { PaginatedList, Tag, Artist, User, NsfwMode, AnimatedMode, Orientation, Role, ImageOrderBy, ReviewStatusFilter } from '../types';
 import { X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { resolveTagsBySlugs, resolveArtistsByIds } from '../utils/metadataResolve';
+import { useFilterLabels, rememberLabel } from '../hooks/useFilterLabels';
+import { useDebouncedField } from '../hooks/useDebouncedField';
 
 interface FilterSidebarProps {
     searchParams: URLSearchParams;
@@ -16,108 +18,21 @@ interface FilterSidebarProps {
 
 const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilters, sortOptions }: FilterSidebarProps) => {
     const { user } = useAuth();
+    const queryClient = useQueryClient();
     const isModeratorOrAdmin = user?.role === Role.Moderator || user?.role === Role.Admin;
+    const isAdmin = user?.role === Role.Admin;
 
     const tagsPageSize = 30;
     const artistsPageSize = 30;
     const usersPageSize = 30;
-    const [initialTags, setInitialTags] = useState<Option[]>([]);
-    const [initialArtists, setInitialArtists] = useState<Option[]>([]);
-    const [initialUsers, setInitialUsers] = useState<Option[]>([]);
-    const [initialLoadDone, setInitialLoadDone] = useState(false);
-    const fetchedArtistIds = useRef<Set<string>>(new Set());
-    const fetchedTagSlugs = useRef<Set<string>>(new Set());
-    const fetchedUserIds = useRef<Set<string>>(new Set());
 
     const idPrefix = useId();
     const [includedIdInput, setIncludedIdInput] = useState('');
     const [excludedIdInput, setExcludedIdInput] = useState('');
 
-    useEffect(() => {
-        const loadInitialData = async () => {
-            try {
-                const [tagsRes, artistsRes] = await Promise.all([
-                    api.get<PaginatedList<Tag>>('/tags', { params: { pageSize: tagsPageSize } }),
-                    api.get<PaginatedList<Artist>>('/artists', { params: { pageSize: artistsPageSize } })
-                ]);
-
-                setInitialTags(tagsRes.data.items.map(t => ({ id: t.id, name: t.name, slug: t.slug, reviewStatus: t.reviewStatus })));
-                setInitialArtists(artistsRes.data.items.map(a => ({ id: a.id, name: a.name, reviewStatus: a.reviewStatus })));
-
-                if (isModeratorOrAdmin) {
-                    const usersRes = await api.get<PaginatedList<User>>('/users', { params: { pageSize: usersPageSize } });
-                    setInitialUsers(usersRes.data.items.map(u => ({ id: u.id, name: u.name })));
-                }
-            } catch (error) {
-                console.error(error);
-            } finally {
-                setInitialLoadDone(true);
-            }
-        };
-
-        loadInitialData();
-    }, [isModeratorOrAdmin]);
-
-    useEffect(() => {
-        if (!initialLoadDone) return;
-
-        const artistIdsFromUrl = [...searchParams.getAll('includedArtists'), ...searchParams.getAll('excludedArtists')];
-        const missingIds = artistIdsFromUrl.filter(id =>
-            !initialArtists.some(a => a.id.toString() === id) && !fetchedArtistIds.current.has(id)
-        );
-
-        if (missingIds.length > 0) {
-            missingIds.forEach(id => fetchedArtistIds.current.add(id));
-
-            resolveArtistsByIds(missingIds.map(Number)).then(artists => {
-                const newArtists = artists.map(a => ({ id: a.id, name: a.name, reviewStatus: a.reviewStatus } as Option));
-                if (newArtists.length > 0) {
-                    setInitialArtists(prev => [...prev, ...newArtists]);
-                }
-            });
-        }
-    }, [searchParams, initialArtists, initialLoadDone]);
-
-    useEffect(() => {
-        if (!initialLoadDone) return;
-
-        const tagSlugsFromUrl = [...searchParams.getAll('includedTags'), ...searchParams.getAll('excludedTags')];
-        const missingSlugs = tagSlugsFromUrl.filter(slug =>
-            !initialTags.some(t => t.slug === slug) && !fetchedTagSlugs.current.has(slug)
-        );
-
-        if (missingSlugs.length > 0) {
-            missingSlugs.forEach(slug => fetchedTagSlugs.current.add(slug));
-
-            resolveTagsBySlugs(missingSlugs).then(tags => {
-                const newTags = tags.map(t => ({ id: t.id, name: t.name, slug: t.slug, reviewStatus: t.reviewStatus } as Option));
-                if (newTags.length > 0) {
-                    setInitialTags(prev => [...prev, ...newTags]);
-                }
-            });
-        }
-    }, [searchParams, initialTags, initialLoadDone]);
-
-    useEffect(() => {
-        if (!initialLoadDone) return;
-
-        const uploaderIdFromUrl = searchParams.get('uploaderId');
-        if (uploaderIdFromUrl &&
-            !initialUsers.some(u => u.id.toString() === uploaderIdFromUrl) &&
-            !fetchedUserIds.current.has(uploaderIdFromUrl)) {
-
-            fetchedUserIds.current.add(uploaderIdFromUrl);
-
-            api.get<PaginatedList<User>>('/users', { params: { includedIds: [uploaderIdFromUrl] } })
-                .then(res => {
-                    if (res.data.items.length > 0) {
-                        const uploader = res.data.items[0];
-                        setInitialUsers(prev => [...prev, { id: uploader.id, name: uploader.name } as Option]);
-                    }
-                })
-                .catch(() => {});
-        }
-    }, [searchParams, initialUsers, initialLoadDone]);
+    const tagLabels = useFilterLabels('tag', [...searchParams.getAll('includedTags'), ...searchParams.getAll('excludedTags')]);
+    const artistLabels = useFilterLabels('artist', [...searchParams.getAll('includedArtists'), ...searchParams.getAll('excludedArtists')]);
+    const userLabels = useFilterLabels('user', isModeratorOrAdmin ? [searchParams.get('uploaderId') || ''] : [], isModeratorOrAdmin);
 
     const loadTags = async (query: string, page: number = 1) => {
         const { data } = await api.get<PaginatedList<Tag>>('/tags', { params: { name: query, pageSize: tagsPageSize, page } });
@@ -130,6 +45,9 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
     };
 
     const loadUsers = async (query: string, page: number = 1) => {
+        if (!isAdmin) {
+            return /^\d+$/.test(query) ? [{ id: Number(query), name: `ID: ${query}` }] : [];
+        }
         const params: Record<string, string | number> = { pageSize: usersPageSize, page };
         if (query) {
             if (/^\d+$/.test(query)) {
@@ -153,8 +71,8 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
     const handleTagChange = (key: 'includedTags' | 'excludedTags', tag: Option, action: 'add' | 'remove') => {
         const value = tag.slug || tag.id.toString();
 
-        if (action === 'add' && !initialTags.some(t => t.slug === value)) {
-            setInitialTags(prev => [...prev, tag]);
+        if (action === 'add' && tag.slug) {
+            rememberLabel(queryClient, 'tag', tag.slug, { id: tag.id, name: tag.name, slug: tag.slug, reviewStatus: tag.reviewStatus });
         }
 
         setSearchParams(prev => {
@@ -174,8 +92,8 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
     const handleArtistChange = (key: 'includedArtists' | 'excludedArtists', artist: Option, action: 'add' | 'remove') => {
         const value = artist.id.toString();
 
-        if (action === 'add' && !initialArtists.some(a => a.id.toString() === value)) {
-            setInitialArtists(prev => [...prev, artist]);
+        if (action === 'add') {
+            rememberLabel(queryClient, 'artist', value, { id: artist.id, name: artist.name, reviewStatus: artist.reviewStatus });
         }
 
         setSearchParams(prev => {
@@ -242,25 +160,25 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
     const height = searchParams.get('height') || '';
     const byteSize = searchParams.get('byteSize') || '';
 
-    const getSelectedTags = (slugs: string[]) => {
+    const getSelectedTags = (slugs: string[]): Option[] => {
         return slugs.map(slug => {
-            const found = initialTags.find(t => t.slug === slug);
-            return found || { id: slug, name: slug, slug: slug };
+            const found = tagLabels.get(slug);
+            return found ? { ...found, slug } : { id: slug, name: slug, slug: slug };
         });
     };
 
-    const getSelectedArtists = (ids: string[]) => {
-        return ids.map(id => {
-            const found = initialArtists.find(a => a.id.toString() === id);
-            return found || { id: id, name: `ID: ${id}` };
-        });
+    const getSelectedArtists = (ids: string[]): Option[] => {
+        return ids.map(id => artistLabels.get(id) || { id: id, name: `ID: ${id}` });
     };
 
     const getSelectedUploader = (id: string): Option[] => {
         if (!id) return [];
-        const found = initialUsers.find(u => u.id.toString() === id);
-        return [found || { id: id, name: `ID: ${id}` }];
+        return [userLabels.get(id) || { id: id, name: `ID: ${id}` }];
     };
+
+    const widthField = useDebouncedField(width, (v) => updateFilter('width', v || null));
+    const heightField = useDebouncedField(height, (v) => updateFilter('height', v || null));
+    const byteSizeField = useDebouncedField(byteSize, (v) => updateFilter('byteSize', v || null));
 
     const ratingOptions = [
         { id: NsfwMode.False, name: 'Safe' },
@@ -373,16 +291,16 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
                                 type="text"
                                 placeholder="Width, e.g. >1920"
                                 aria-label="Width"
-                                value={width}
-                                onChange={e => updateFilter('width', e.target.value)}
+                                autoComplete="off"
+                                {...widthField}
                                 className="input"
                             />
                             <input
                                 type="text"
                                 placeholder="Height, e.g. <1080"
                                 aria-label="Height"
-                                value={height}
-                                onChange={e => updateFilter('height', e.target.value)}
+                                autoComplete="off"
+                                {...heightField}
                                 className="input"
                             />
                         </div>
@@ -393,8 +311,8 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
                             id={`${idPrefix}-bytes`}
                             type="text"
                             placeholder="e.g. <1000000"
-                            value={byteSize}
-                            onChange={e => updateFilter('byteSize', e.target.value)}
+                            autoComplete="off"
+                            {...byteSizeField}
                             className="input"
                         />
                     </div>
@@ -455,12 +373,12 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
                         />
                         <SearchableSelect
                             label="Uploader"
-                            placeholder="Search users by name or ID…"
+                            placeholder={isAdmin ? 'Search users by name or ID…' : 'Type a user ID…'}
                             loadOptions={loadUsers}
                             selectedOptions={getSelectedUploader(uploaderId)}
                             onSelect={(o) => {
-                                if (!initialUsers.some(u => u.id.toString() === o.id.toString())) {
-                                    setInitialUsers(prev => [...prev, o]);
+                                if (!String(o.name).startsWith('ID: ')) {
+                                    rememberLabel(queryClient, 'user', o.id.toString(), { id: o.id, name: o.name });
                                 }
                                 updateFilter('uploaderId', o.id.toString());
                             }}

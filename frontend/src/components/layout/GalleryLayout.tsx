@@ -1,5 +1,5 @@
 import { useState, ReactNode } from 'react';
-import { useNavigate } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { ImageDto, Role, ImageFormData, ImageOrderBy, NsfwMode, PaginatedList, ReviewableContentType } from '../../types';
 import { useAuth } from '../../context/AuthContext';
@@ -14,9 +14,25 @@ import FloatingRefreshButton from '../FloatingRefreshButton';
 import ConfirmModal from '../modals/ConfirmModal';
 import ImageModal from '../modals/ImageModal';
 import { Option } from '../SearchableSelect';
-import { Tags, Shuffle, Loader2 } from 'lucide-react';
+import { Tags, Shuffle, Loader2, Braces, Play, Bookmark, Settings2 } from 'lucide-react';
 import EmptyState from '../EmptyState';
 import { useTagView } from '../../hooks/useTagView';
+import { useHotkeys } from '../../hooks/useHotkeys';
+import ActiveFilters from '../ActiveFilters';
+import ApiRequestDialog from '../modals/ApiRequestDialog';
+import { imageListParams } from '../../utils/apiSnippets';
+import { BrowseSource, saveBrowseContext } from '../../utils/browseContext';
+import { Dropdown, DropdownTrigger, DropdownItem, DropdownSeparator } from '../Dropdown';
+import { SaveSearchDialog, ManageSavedSearchesDialog } from '../modals/SavedSearchesDialog';
+import { useSavedSearches } from '../../hooks/useSavedSearches';
+import { addSavedSearch, savedSearchHref, searchQueryOf } from '../../utils/savedSearches';
+
+export interface GalleryApiRequest {
+    path: string;
+    defaults?: Record<string, string>;
+    fixed?: Record<string, string>;
+    needsAuth?: boolean;
+}
 
 interface GalleryLayoutProps {
     images: ImageDto[];
@@ -35,6 +51,8 @@ interface GalleryLayoutProps {
     emptyState?: ReactNode;
     onRemoveFromAlbum?: (id: number) => void;
     readOnly?: boolean;
+    totalCount?: number;
+    apiRequest?: GalleryApiRequest;
 }
 
 export const GalleryLayout = ({
@@ -53,13 +71,16 @@ export const GalleryLayout = ({
                                   sortOptions,
                                   emptyState,
                                   onRemoveFromAlbum,
-                                  readOnly = false
+                                  readOnly = false,
+                                  totalCount,
+                                  apiRequest,
                               }: GalleryLayoutProps) => {
     const { user } = useAuth();
     const { showNotification } = useNotification();
     const { updateImage } = useImageUpdate();
     const queryClient = useQueryClient();
     const navigate = useNavigate();
+    const location = useLocation();
 
     const { showTags, toggle: toggleTags } = useTagView();
 
@@ -71,6 +92,17 @@ export const GalleryLayout = ({
     const [suggestingImage, setSuggestingImage] = useState<ImageDto | null>(null);
     const [isSuggestModalOpen, setIsSuggestModalOpen] = useState(false);
     const [isSurprising, setIsSurprising] = useState(false);
+    const [isApiOpen, setIsApiOpen] = useState(false);
+    const [saveName, setSaveName] = useState<string | null>(null);
+    const [isManageOpen, setIsManageOpen] = useState(false);
+    const savedSearches = useSavedSearches();
+    const canSaveSearches = !readOnly;
+
+    const saveSearch = (name: string) => {
+        addSavedSearch(name, location.pathname, searchQueryOf(searchParams));
+        setSaveName(null);
+        showNotification('success', 'Search saved');
+    };
 
     const surpriseMe = async () => {
         if (isSurprising) return;
@@ -95,6 +127,39 @@ export const GalleryLayout = ({
 
     const isAdmin = user?.role === Role.Admin;
     const isAdminOrModerator = user && (user.role === Role.Admin || user.role === Role.Moderator);
+
+    const listParams = apiRequest ? imageListParams(searchParams, apiRequest.defaults, apiRequest.fixed) : null;
+    const browseSource: BrowseSource | undefined = apiRequest && listParams ? {
+        path: apiRequest.path,
+        params: listParams.toString(),
+        firstPage: page,
+        lastPage: page,
+        totalPages: Math.max(totalPages, 1),
+        pageSize: Number(listParams.get('pageSize')) || Math.max(images.length, 1),
+        totalCount,
+    } : undefined;
+
+    const startSlideshow = () => {
+        if (images.length === 0) return false;
+        saveBrowseContext({ ids: images.map((img) => img.id), from: `${location.pathname}${location.search}`, source: browseSource });
+        navigate(`/images/${images[0].id}`, { state: { slideshow: true } });
+    };
+
+    const goToPage = (next: number) => {
+        if (next < 1 || next > totalPages || next === page) return false;
+        setPage(next);
+        window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+    };
+
+    useHotkeys({
+        ArrowLeft: () => goToPage(page - 1),
+        ArrowRight: () => goToPage(page + 1),
+        f: () => setShowFilters((open) => !open),
+        t: () => toggleTags(),
+        r: () => refetch(),
+        d: () => { void surpriseMe(); },
+        s: () => startSlideshow(),
+    });
 
     const confirmDelete = (id: number) => {
         setImageToDelete(id);
@@ -144,11 +209,54 @@ export const GalleryLayout = ({
                         )}
                     </div>
                     <div className="flex shrink-0 items-center gap-2 self-end md:self-auto">
+                        {canSaveSearches && savedSearches.length > 0 && (
+                            <Dropdown
+                                width="w-72"
+                                label="Saved searches"
+                                trigger={
+                                    <DropdownTrigger className="btn btn-secondary">
+                                        <Bookmark size={16} aria-hidden="true" />
+                                        <span className="hidden xl:inline">Saved</span>
+                                    </DropdownTrigger>
+                                }
+                            >
+                                {savedSearches.slice(0, 12).map((search) => (
+                                    <DropdownItem key={search.id} to={savedSearchHref(search)} icon={<Bookmark size={15} />}>
+                                        <span className="truncate">{search.name}</span>
+                                    </DropdownItem>
+                                ))}
+                                <DropdownSeparator />
+                                <DropdownItem onClick={() => setIsManageOpen(true)} icon={<Settings2 size={15} />}>Manage saved searches…</DropdownItem>
+                            </Dropdown>
+                        )}
+                        {apiRequest && (
+                            <button
+                                type="button"
+                                onClick={() => setIsApiOpen(true)}
+                                title="Get this request for the API"
+                                aria-label="Use this in the API"
+                                className="btn btn-secondary"
+                            >
+                                <Braces size={16} aria-hidden="true" />
+                                <span className="hidden lg:inline">API</span>
+                            </button>
+                        )}
+                        <button
+                            type="button"
+                            onClick={startSlideshow}
+                            disabled={isLoading || images.length === 0}
+                            title="Play these results as a slideshow (S)"
+                            aria-label="Play a slideshow"
+                            className="btn btn-secondary"
+                        >
+                            <Play size={16} aria-hidden="true" />
+                            <span className="hidden xl:inline">Slideshow</span>
+                        </button>
                         <button
                             type="button"
                             onClick={surpriseMe}
                             disabled={isSurprising}
-                            title="Open a random image that matches the content rating"
+                            title="Open a random image that matches the content rating (D)"
                             className="btn btn-secondary"
                         >
                             {isSurprising ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Shuffle size={16} aria-hidden="true" />}
@@ -157,7 +265,7 @@ export const GalleryLayout = ({
                         <button
                             type="button"
                             onClick={toggleTags}
-                            title={showTags ? 'Hide tags' : 'Show tags'}
+                            title={showTags ? 'Hide tags (T)' : 'Show tags (T)'}
                             aria-label={showTags ? 'Hide tags' : 'Show tags'}
                             aria-pressed={showTags}
                             className={`btn ${showTags ? 'bg-brand-soft text-brand-ink ring-1 ring-brand/30 hover:bg-brand-soft' : 'btn-secondary'}`}
@@ -170,6 +278,13 @@ export const GalleryLayout = ({
                 </div>
 
                 <div className="px-4 sm:px-7 lg:px-10">
+                    <ActiveFilters
+                        searchParams={searchParams}
+                        setSearchParams={setSearchParams}
+                        totalCount={totalCount}
+                        isLoading={isLoading}
+                        onSave={canSaveSearches ? setSaveName : undefined}
+                    />
                     <ImageGrid
                         images={images}
                         isLoading={isLoading}
@@ -181,6 +296,7 @@ export const GalleryLayout = ({
                         onRemove={onRemoveFromAlbum}
                         readOnly={readOnly}
                         showTags={showTags}
+                        browseSource={browseSource}
                         emptyState={emptyState || (
                             <EmptyState
                                 isCheckingAlternatives={false}
@@ -208,6 +324,25 @@ export const GalleryLayout = ({
                 setShowFilters={setShowFilters}
                 sortOptions={sortOptions || defaultSortOptions}
             />
+
+            <SaveSearchDialog
+                isOpen={saveName !== null}
+                onClose={() => setSaveName(null)}
+                defaultName={saveName ?? ''}
+                onSave={saveSearch}
+            />
+            <ManageSavedSearchesDialog isOpen={isManageOpen} onClose={() => setIsManageOpen(false)} />
+
+            {apiRequest && (
+                <ApiRequestDialog
+                    isOpen={isApiOpen}
+                    onClose={() => setIsApiOpen(false)}
+                    path={apiRequest.path}
+                    params={listParams ?? undefined}
+                    needsAuth={apiRequest.needsAuth}
+                    description="The request behind this page of results, with the current filters. Change the page or the filters and it follows along."
+                />
+            )}
 
             <ConfirmModal
                 isOpen={isDeleteModalOpen}

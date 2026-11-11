@@ -24,6 +24,8 @@ const Imprint = lazy(() => import('./pages/Imprint'))
 const Privacy = lazy(() => import('./pages/Privacy'))
 const SiteBannerSettings = lazy(() => import('./pages/SiteBannerSettings'))
 const NotFound = lazy(() => import('./pages/NotFound'))
+const ArtistPage = lazy(() => import('./pages/ArtistPage'))
+const TagPage = lazy(() => import('./pages/TagPage'))
 
 function App() {
     return (
@@ -37,7 +39,9 @@ function App() {
                 <Route path="users/:userId/albums/:id" element={<AlbumPage />} />
                 <Route path="images/:id" element={<ImagePage />} />
                 <Route path="tags" element={<Tags />} />
+                <Route path="tags/:slug" element={<TagPage />} />
                 <Route path="artists" element={<Artists />} />
+                <Route path="artists/:id" element={<ArtistPage />} />
                 <Route path="login" element={<Login />} />
                 <Route path="upload" element={<Upload />} />
                 <Route path="review" element={<Review />} />
