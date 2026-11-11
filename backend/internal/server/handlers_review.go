@@ -180,7 +180,7 @@ func (s *Server) hydrateReviewTasks(ctx context.Context, ident *auth.Identity, t
 			}
 			return rows.Err()
 		})
-		children = queueImageChildren(b, imageIDs, opts)
+		children = s.queueImageChildren(b, imageIDs, opts)
 	}
 
 	tags := map[int64]tagDto{}

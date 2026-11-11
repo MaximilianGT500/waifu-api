@@ -232,6 +232,43 @@
         }
       }
     },
+    "/users/me/summary": {
+      "get": {
+        "tags": ["Users"],
+        "summary": "Get an overview of your account",
+        "security": [{ "Bearer": [] }, { "ApiKey": [] }],
+        "responses": {
+          "200": {
+            "description": "Returns counters for uploads, favorites, albums, API keys, reports, review submissions and requests.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AccountSummaryDto" }
+              }
+            }
+          },
+          "401": { "description": "Authentication required." }
+        }
+      }
+    },
+    "/users/me/export": {
+      "get": {
+        "tags": ["Users"],
+        "summary": "Export your account data",
+        "description": "Returns everything stored about your account as a JSON download: profile, albums with their images, API keys (without secrets), uploads, created tags and artists, reports and review submissions.",
+        "security": [{ "Bearer": [] }, { "ApiKey": [] }],
+        "responses": {
+          "200": {
+            "description": "The export, sent with Content-Disposition: attachment.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "additionalProperties": true }
+              }
+            }
+          },
+          "401": { "description": "Authentication required." }
+        }
+      }
+    },
     "/users/{id}": {
       "get": {
         "tags": ["Users"],
@@ -479,6 +516,36 @@
             }
           }
         }
+      },
+      "patch": {
+        "tags": ["Albums"],
+        "summary": "Add and remove several images at once",
+        "description": "Adds and removes up to 100 images in one transaction. Images you cannot see are skipped and listed in the response.",
+        "security": [{ "Bearer": [] }],
+        "parameters": [
+          { "name": "userId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "albumId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Album id or \"favorites\"" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AlbumBatchRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Returns how many images were added and removed.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AlbumBatchResult" }
+              }
+            }
+          },
+          "400": { "description": "Too many or no image ids." },
+          "404": { "description": "Album not found." }
+        }
       }
     },
     "/users/{userId}/albums/{albumId}/images/{imageId}": {
@@ -529,7 +596,12 @@
           { "name": "reviewStatus", "in": "query", "schema": { "$ref": "#/components/schemas/ReviewStatusFilter" } },
           { "name": "includeMyPending", "in": "query", "schema": { "type": "boolean" } },
           { "name": "includeMyPendingChildren", "in": "query", "schema": { "type": "boolean" } },
-          { "name": "childrenReviewStatus", "in": "query", "schema": { "$ref": "#/components/schemas/ReviewStatusFilter" } }
+          { "name": "childrenReviewStatus", "in": "query", "schema": { "$ref": "#/components/schemas/ReviewStatusFilter" } },
+          { "$ref": "#/components/parameters/Color" },
+          { "$ref": "#/components/parameters/ColorTolerance" },
+          { "$ref": "#/components/parameters/UploadedAfter" },
+          { "$ref": "#/components/parameters/UploadedBefore" },
+          { "name": "mine", "in": "query", "schema": { "type": "boolean" }, "description": "Only your own uploads. Combine with includeMyPending=true to include the ones still waiting for review. Returns nothing for anonymous requests." }
         ],
         "responses": {
           "200": {
@@ -540,6 +612,91 @@
               }
             }
           }
+        }
+      }
+    },
+    "/images/facets": {
+      "get": {
+        "tags": ["Images"],
+        "summary": "Count tags and artists of a search",
+        "description": "Accepts the same filters as GET /images and returns the number of matching images plus the most frequent tags and artists among them. Tags and artists already included in the filter are left out, so every entry narrows the search further.",
+        "parameters": [
+          { "$ref": "#/components/parameters/IsNsfw" },
+          { "$ref": "#/components/parameters/IsAnimated" },
+          { "$ref": "#/components/parameters/Orientation" },
+          { "name": "includedTags", "in": "query", "schema": { "type": "array", "items": { "type": "string" } } },
+          { "name": "excludedTags", "in": "query", "schema": { "type": "array", "items": { "type": "string" } } },
+          { "name": "includedArtists", "in": "query", "schema": { "type": "array", "items": { "type": "string" } } },
+          { "name": "excludedArtists", "in": "query", "schema": { "type": "array", "items": { "type": "string" } } },
+          { "$ref": "#/components/parameters/Color" },
+          { "$ref": "#/components/parameters/ColorTolerance" },
+          { "$ref": "#/components/parameters/UploadedAfter" },
+          { "$ref": "#/components/parameters/UploadedBefore" },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 50, "default": 12 }, "description": "Entries per list." }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the facets.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ImageFacetsDto" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/images/feed": {
+      "get": {
+        "tags": ["Images"],
+        "summary": "Atom feed of the newest images",
+        "description": "Accepts the same filters as GET /images and returns the newest matching images as an Atom feed for feed readers. Each entry links to the image page and carries the file as an enclosure.",
+        "parameters": [
+          { "$ref": "#/components/parameters/IsNsfw" },
+          { "$ref": "#/components/parameters/IsAnimated" },
+          { "$ref": "#/components/parameters/Orientation" },
+          { "name": "includedTags", "in": "query", "schema": { "type": "array", "items": { "type": "string" } } },
+          { "name": "excludedTags", "in": "query", "schema": { "type": "array", "items": { "type": "string" } } },
+          { "name": "includedArtists", "in": "query", "schema": { "type": "array", "items": { "type": "string" } } },
+          { "name": "excludedArtists", "in": "query", "schema": { "type": "array", "items": { "type": "string" } } },
+          { "$ref": "#/components/parameters/Color" },
+          { "$ref": "#/components/parameters/ColorTolerance" },
+          { "name": "pageSize", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 50, "default": 30 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the feed.",
+            "content": {
+              "application/atom+xml": {
+                "schema": { "type": "string" }
+              }
+            }
+          },
+          "304": { "description": "The feed did not change (If-None-Match)." }
+        }
+      }
+    },
+    "/images/{id}/similar": {
+      "get": {
+        "tags": ["Images"],
+        "summary": "Find visually similar images",
+        "description": "Compares perceptual hashes and returns the closest accepted images, nearest first.",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int64" } },
+          { "$ref": "#/components/parameters/IsNsfw" },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 30, "default": 12 } },
+          { "name": "maxDistance", "in": "query", "schema": { "type": "integer", "minimum": 0, "maximum": 64, "default": 64 }, "description": "Maximum Hamming distance between the 64-bit hashes." }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the similar images.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PaginatedImageDto" }
+              }
+            }
+          },
+          "404": { "description": "Image with ID {id} not found." }
         }
       }
     },
@@ -1447,8 +1604,12 @@
       "PageSize": { "name": "pageSize", "in": "query", "schema": { "type": "integer" } },
       "IsNsfw": { "name": "isNsfw", "in": "query", "schema": { "type": "string", "enum": ["False", "True", "All"], "default": "False" } },
       "IsAnimated": { "name": "isAnimated", "in": "query", "schema": { "type": "string", "enum": ["False", "True", "All"], "default": "All" } },
-      "OrderBy": { "name": "orderBy", "in": "query", "schema": { "type": "string", "enum": ["Random", "UploadedAt", "Favorites", "AddedToAlbum"], "default": "Random" } },
-      "Orientation": { "name": "orientation", "in": "query", "schema": { "type": "string", "enum": ["All", "Landscape", "Portrait", "Square"], "default": "All" } }
+      "OrderBy": { "name": "orderBy", "in": "query", "schema": { "type": "string", "enum": ["Random", "UploadedAt", "Favorites", "Trending", "AddedToAlbum"], "default": "Random" }, "description": "Trending sorts by favorites added during the last seven days." },
+      "Orientation": { "name": "orientation", "in": "query", "schema": { "type": "string", "enum": ["All", "Landscape", "Portrait", "Square"], "default": "All" } },
+      "Color": { "name": "color", "in": "query", "schema": { "type": "string", "pattern": "^#?[0-9A-Fa-f]{6}$" }, "description": "Only images whose dominant color is close to this hex color, e.g. #F4A6C1." },
+      "ColorTolerance": { "name": "colorTolerance", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 15 }, "description": "How far the dominant color may be from color, in percent of the largest possible distance." },
+      "UploadedAfter": { "name": "uploadedAfter", "in": "query", "schema": { "type": "string", "format": "date-time" }, "description": "Only images uploaded after this time (RFC 3339 or YYYY-MM-DD)." },
+      "UploadedBefore": { "name": "uploadedBefore", "in": "query", "schema": { "type": "string", "format": "date-time" }, "description": "Only images uploaded before this time (RFC 3339 or YYYY-MM-DD)." }
     },
     "schemas": {
       "Role": { "type": "string", "enum": ["User", "TrustedUser", "Moderator", "Admin"] },
@@ -1719,6 +1880,78 @@
           "requestCount": { "type": "integer", "format": "int64" },
           "apiKeyRequestCount": { "type": "integer", "format": "int64" },
           "jwtRequestCount": { "type": "integer", "format": "int64" }
+        }
+      },
+      "FacetEntry": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "name": { "type": "string" },
+          "slug": { "type": "string", "description": "Only set for tags." },
+          "count": { "type": "integer", "format": "int64", "description": "Matching images that carry this tag or artist." }
+        }
+      },
+      "ImageFacetsDto": {
+        "type": "object",
+        "properties": {
+          "totalCount": { "type": "integer", "format": "int64" },
+          "tags": { "type": "array", "items": { "$ref": "#/components/schemas/FacetEntry" } },
+          "artists": { "type": "array", "items": { "$ref": "#/components/schemas/FacetEntry" } }
+        }
+      },
+      "AlbumBatchRequest": {
+        "type": "object",
+        "properties": {
+          "add": { "type": "array", "items": { "type": "integer", "format": "int64" }, "maxItems": 100 },
+          "remove": { "type": "array", "items": { "type": "integer", "format": "int64" }, "maxItems": 100 }
+        }
+      },
+      "AlbumBatchResult": {
+        "type": "object",
+        "properties": {
+          "added": { "type": "integer", "format": "int64" },
+          "removed": { "type": "integer", "format": "int64" },
+          "skipped": { "type": "array", "items": { "type": "integer", "format": "int64" }, "description": "Ids that do not exist or that you cannot see." },
+          "imageCount": { "type": "integer", "format": "int64", "description": "Images in the album afterwards." }
+        }
+      },
+      "AccountSummaryDto": {
+        "type": "object",
+        "properties": {
+          "uploads": {
+            "type": "object",
+            "properties": {
+              "accepted": { "type": "integer", "format": "int64" },
+              "pending": { "type": "integer", "format": "int64" },
+              "rejected": { "type": "integer", "format": "int64" }
+            }
+          },
+          "favorites": { "type": "integer", "format": "int64" },
+          "albums": { "type": "integer", "format": "int64" },
+          "albumImages": { "type": "integer", "format": "int64" },
+          "apiKeys": { "type": "integer", "format": "int64" },
+          "reports": {
+            "type": "object",
+            "properties": {
+              "pending": { "type": "integer", "format": "int64" },
+              "total": { "type": "integer", "format": "int64" }
+            }
+          },
+          "submissions": {
+            "type": "object",
+            "properties": {
+              "pending": { "type": "integer", "format": "int64" },
+              "total": { "type": "integer", "format": "int64" }
+            }
+          },
+          "requests": {
+            "type": "object",
+            "properties": {
+              "total": { "type": "integer", "format": "int64" },
+              "apiKey": { "type": "integer", "format": "int64" },
+              "jwt": { "type": "integer", "format": "int64" }
+            }
+          }
         }
       },
       "PaginatedImageDto": { "$ref": "#/components/schemas/PaginatedList" },

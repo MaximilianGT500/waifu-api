@@ -21,6 +21,133 @@ func (s *Server) RegisterAlbumRoutes() {
 	s.Handle("GET /users/{userId}/albums/{albumId}/images", s.RequireAuth(http.HandlerFunc(s.handleListAlbumImages)))
 	s.Handle("POST /users/{userId}/albums/{albumId}/images/{imageId}", s.RequireAuth(http.HandlerFunc(s.handleAddAlbumImage)))
 	s.Handle("DELETE /users/{userId}/albums/{albumId}/images/{imageId}", s.RequireAuth(http.HandlerFunc(s.handleRemoveAlbumImage)))
+	s.Handle("PATCH /users/{userId}/albums/{albumId}/images", s.RequireAuth(http.HandlerFunc(s.handleBatchAlbumImages)))
+}
+
+const albumBatchMax = 100
+
+type albumBatchRequest struct {
+	Add    []int64 `json:"add"`
+	Remove []int64 `json:"remove"`
+}
+
+type albumBatchResult struct {
+	Added      int64   `json:"added"`
+	Removed    int64   `json:"removed"`
+	Skipped    []int64 `json:"skipped"`
+	ImageCount int64   `json:"imageCount"`
+}
+
+func uniquePositive(ids []int64) ([]int64, bool) {
+	seen := make(map[int64]struct{}, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			return nil, false
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out, true
+}
+
+func (s *Server) handleBatchAlbumImages(w http.ResponseWriter, r *http.Request) {
+	ident := IdentityFromContext(r.Context())
+	ctx := r.Context()
+	userID, ok := s.resolveAlbumUser(w, r, ident)
+	if !ok {
+		return
+	}
+	albumID, ok := s.resolveAlbumID(w, r, userID)
+	if !ok {
+		return
+	}
+	var req albumBatchRequest
+	if err := decodeJSON(r, &req); err != nil {
+		WriteValidationProblem(w, r, map[string][]string{"": {"The request could not be processed."}})
+		return
+	}
+	add, okAdd := uniquePositive(req.Add)
+	remove, okRemove := uniquePositive(req.Remove)
+	errs := map[string][]string{}
+	if !okAdd || len(add) > albumBatchMax {
+		errs["Add"] = []string{fmt.Sprintf("Add must contain at most %d positive image IDs.", albumBatchMax)}
+	}
+	if !okRemove || len(remove) > albumBatchMax {
+		errs["Remove"] = []string{fmt.Sprintf("Remove must contain at most %d positive image IDs.", albumBatchMax)}
+	}
+	if len(errs) == 0 && len(add) == 0 && len(remove) == 0 {
+		errs[""] = []string{"Add or remove at least one image."}
+	}
+	if len(errs) > 0 {
+		WriteValidationProblem(w, r, errs)
+		return
+	}
+
+	owned, err := s.albumOwned(ctx, albumID, userID)
+	if err != nil {
+		InternalError(w, r, s.log, err)
+		return
+	}
+	if !owned {
+		NotFound(w, r, fmt.Sprintf("Album with ID %d not found.", albumID))
+		return
+	}
+
+	res := albumBatchResult{Skipped: []int64{}}
+	err = pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
+		if len(add) > 0 {
+			rows, err := tx.Query(ctx, `
+				SELECT i."Id" FROM "Images" i
+				WHERE i."Id" = ANY($1) AND (i."ReviewStatus" = 1 OR $2 OR i."UploaderId" = $3)`, add, isModerator(ident), ident.UserID)
+			if err != nil {
+				return err
+			}
+			visible, err := collectIDs(rows)
+			if err != nil {
+				return err
+			}
+			known := make(map[int64]struct{}, len(visible))
+			for _, id := range visible {
+				known[id] = struct{}{}
+			}
+			for _, id := range add {
+				if _, ok := known[id]; !ok {
+					res.Skipped = append(res.Skipped, id)
+				}
+			}
+			if len(visible) > 0 {
+				tag, err := tx.Exec(ctx, `
+					INSERT INTO "AlbumItems" ("AlbumId","ImageId","AddedAt")
+					SELECT $1, v.id, now() FROM unnest($2::bigint[]) AS v(id)
+					ON CONFLICT DO NOTHING`, albumID, visible)
+				if err != nil {
+					return err
+				}
+				res.Added = tag.RowsAffected()
+			}
+		}
+		if len(remove) > 0 {
+			tag, err := tx.Exec(ctx, `DELETE FROM "AlbumItems" WHERE "AlbumId" = $1 AND "ImageId" = ANY($2)`, albumID, remove)
+			if err != nil {
+				return err
+			}
+			res.Removed = tag.RowsAffected()
+		}
+		return tx.QueryRow(ctx, `SELECT COUNT(*) FROM "AlbumItems" WHERE "AlbumId" = $1`, albumID).Scan(&res.ImageCount)
+	})
+	if isForeignKeyViolation(err) {
+		Conflict(w, r, "One of the images was removed meanwhile. Please try again.")
+		return
+	}
+	if err != nil {
+		InternalError(w, r, s.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (s *Server) resolveAlbumUser(w http.ResponseWriter, r *http.Request, ident *auth.Identity) (int64, bool) {

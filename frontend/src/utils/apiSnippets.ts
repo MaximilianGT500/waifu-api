@@ -1,4 +1,5 @@
 import { getEnv } from './env';
+import { sinceToIso } from './imageFilters';
 
 export type SnippetLanguage = 'url' | 'curl' | 'javascript' | 'python';
 
@@ -21,13 +22,15 @@ export function apiBaseUrl(): string {
 const IMAGE_LIST_PARAMS = [
     'isNsfw', 'isAnimated', 'orientation', 'orderBy', 'width', 'height', 'byteSize',
     'includedTags', 'excludedTags', 'includedArtists', 'excludedArtists', 'includedIds', 'excludedIds',
-    'uploaderId', 'reviewStatus', 'page', 'pageSize',
+    'uploaderId', 'reviewStatus', 'color', 'colorTolerance', 'uploadedAfter', 'uploadedBefore', 'mine', 'includeMyPending',
+    'page', 'pageSize',
 ];
 
 export function imageListParams(searchParams: URLSearchParams, defaults: Record<string, string> = {}, fixed: Record<string, string> = {}): URLSearchParams {
     const out = new URLSearchParams();
+    const since = sinceToIso(searchParams.get('since'));
     for (const key of IMAGE_LIST_PARAMS) {
-        const values = searchParams.getAll(key).filter((v) => v !== '');
+        const values = key === 'uploadedAfter' && since ? [since] : searchParams.getAll(key).filter((v) => v !== '');
         if (values.length === 0 && defaults[key] !== undefined) values.push(defaults[key]);
         if (fixed[key] !== undefined && !values.includes(fixed[key])) values.unshift(fixed[key]);
         for (const value of values) out.append(key, value);

@@ -32,23 +32,28 @@ const designSwitch = (): Plugin => ({
 })
 
 const PRECOMPRESS = /\.(?:js|css|svg|json)$/
-const precompress = (): Plugin => ({
-  name: 'precompress',
-  apply: 'build',
-  closeBundle() {
-    const outDir = path.resolve(import.meta.dirname, 'dist')
-    const compress = (file: string) => {
-      const source = readFileSync(file)
-      if (source.length < 1024) return
-      const gz = gzipSync(source, { level: zlib.Z_BEST_COMPRESSION })
-      if (gz.length < source.length * 0.9) writeFileSync(`${file}.gz`, gz)
-    }
-    for (const name of readdirSync(path.join(outDir, 'assets'))) {
-      if (PRECOMPRESS.test(name)) compress(path.join(outDir, 'assets', name))
-    }
-    for (const name of ['index.html', 'classic.html']) compress(path.join(outDir, name))
-  },
-})
+const precompress = (): Plugin => {
+  let outDir = path.resolve(import.meta.dirname, 'dist')
+  return {
+    name: 'precompress',
+    apply: 'build',
+    configResolved(config) {
+      outDir = path.resolve(config.root, config.build.outDir)
+    },
+    closeBundle() {
+      const compress = (file: string) => {
+        const source = readFileSync(file)
+        if (source.length < 1024) return
+        const gz = gzipSync(source, { level: zlib.Z_BEST_COMPRESSION })
+        if (gz.length < source.length * 0.9) writeFileSync(`${file}.gz`, gz)
+      }
+      for (const name of readdirSync(path.join(outDir, 'assets'))) {
+        if (PRECOMPRESS.test(name)) compress(path.join(outDir, 'assets', name))
+      }
+      for (const name of ['index.html', 'classic.html']) compress(path.join(outDir, name))
+    },
+  }
+}
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, path.resolve(import.meta.dirname, '..'), '')

@@ -161,8 +161,8 @@ func (s *Server) handleListTags(w http.ResponseWriter, r *http.Request) {
 		join := tagCountJoin
 		count := "tc.cnt"
 		if usage != nil {
-			join = usageJoin("tc", "t", a.add(usage.ids), a.add(usage.counts))
-			count = "COALESCE(tc.cnt, 0)"
+			join = ""
+			count = "0::bigint"
 		}
 		vis, _ := lookupVisibility(r, ident, "t", a)
 		var where string
@@ -182,6 +182,11 @@ func (s *Server) handleListTags(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			InternalError(w, r, s.log, err)
 			return
+		}
+		if usage != nil {
+			for i := range items {
+				items[i].ImageCount = usage.byID[items[i].ID]
+			}
 		}
 		writePublicJSON(w, r, s.newPaginated(items, 1, len(items), int64(len(items)), s.cfg.PageSizes.TagMax, s.cfg.PageSizes.TagDefault))
 		return
@@ -207,13 +212,45 @@ func (s *Server) handleListTags(w http.ResponseWriter, r *http.Request) {
 		InternalError(w, r, s.log, err)
 		return
 	}
+	if usage != nil {
+		idArgs := &sqlArgs{}
+		where := filter(idArgs)
+		cacheKey := ""
+		if name == "" && len(idArgs.args) == 0 {
+			cacheKey = "tags" + where
+		}
+		pageIDs, total, err := s.rankedPage(ctx, cacheKey, `SELECT t."Id" FROM "Tags" t`+where, idArgs.args, usage, page, pageSize)
+		if err != nil {
+			InternalError(w, r, s.log, err)
+			return
+		}
+		items := []tagDto{}
+		if len(pageIDs) > 0 {
+			rows, err := s.db.Query(ctx, `
+				SELECT t."Id", t."Name", t."Slug", t."Description", t."ReviewStatus", t."CreatorId", 0::bigint
+				FROM "Tags" t WHERE t."Id" = ANY($1)`, pageIDs)
+			if err != nil {
+				InternalError(w, r, s.log, err)
+				return
+			}
+			scanned, err := scanTagRows(rows, ident)
+			if err != nil {
+				InternalError(w, r, s.log, err)
+				return
+			}
+			items = orderByIDs(pageIDs, scanned, func(t tagDto) int64 { return t.ID })
+			for i := range items {
+				items[i].ImageCount = usage.byID[items[i].ID]
+			}
+		}
+		writePublicJSON(w, r, s.newPaginated(items, page, pageSize, total, s.cfg.PageSizes.TagMax, s.cfg.PageSizes.TagDefault))
+		return
+	}
+
 	countArgs := &sqlArgs{}
 	countWhere := filter(countArgs)
 	listArgs := &sqlArgs{}
 	join := tagCountAggregateJoin
-	if usage != nil {
-		join = usageJoin("tc", "t", listArgs.add(usage.ids), listArgs.add(usage.counts))
-	}
 	listWhere := filter(listArgs)
 
 	var total int64

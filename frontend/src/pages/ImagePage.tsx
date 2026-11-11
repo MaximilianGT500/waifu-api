@@ -2,10 +2,10 @@ import { useState, useEffect, ReactNode, CSSProperties } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate, useLocation, Link } from 'react-router';
 import api, { httpStatus } from '../services/api';
-import { ImageDto, Role, ImageFormData, ReviewStatus, ReviewableContentType } from '../types';
+import { ImageDto, Role, ImageFormData, ReviewStatus, ReviewableContentType, NsfwMode } from '../types';
 import {
   Heart, Trash2, Edit, FolderPlus, Flag, Image, GitPullRequest, Clock, Plus, Download, Link2, Check,
-  Share2, Braces, Maximize2, ChevronLeft, ChevronRight, ArrowLeft, ImageOff, Code2, MessageSquareCode, Send, Play, Copy,
+  Share2, Braces, Maximize2, ChevronLeft, ChevronRight, ArrowLeft, ImageOff, Code2, MessageSquareCode, Send, Play, Copy, Palette,
 } from 'lucide-react';
 import { useMyPendingImageEdits } from '../hooks/useMyPendingImageEdits';
 import { invalidateNavBadges } from '../hooks/useNavBadges';
@@ -24,6 +24,10 @@ import ApiRequestDialog from '../components/modals/ApiRequestDialog';
 import NsfwWarning from '../components/NsfwWarning';
 import Lightbox from '../components/Lightbox';
 import RelatedImages from '../components/RelatedImages';
+import SimilarImages from '../components/SimilarImages';
+import ColorPalette from '../components/ColorPalette';
+import { sfx } from '../utils/sfx';
+import { normalizeHex } from '../utils/imageFilters';
 import { Dropdown, DropdownTrigger, DropdownItem, DropdownSeparator } from '../components/Dropdown';
 import NotFound from './NotFound';
 import { MetaTags } from '../hooks/useMetaTags';
@@ -177,6 +181,22 @@ const ImageView = ({ id }: { id: string }) => {
       if (!image || needsConsent || !nav) return false;
       openViewer(true);
     },
+    l: () => {
+      if (!image || needsConsent) return false;
+      void handleLike();
+    },
+    a: () => {
+      if (!image || needsConsent) return false;
+      if (checkAuth('You must be logged in to add images to albums.')) setIsAlbumModalOpen(true);
+    },
+    d: () => {
+      if (!image || needsConsent) return false;
+      void handleDownload();
+    },
+    c: () => {
+      if (!image) return false;
+      void copy('link', pageUrl, 'Link copied to clipboard');
+    },
   });
 
   const flashCopied = (key: string) => {
@@ -283,6 +303,7 @@ const ImageView = ({ id }: { id: string }) => {
     if (!image || isLiking) return;
     setIsLiking(true);
     const liked = !!image.likedAt;
+    if (!liked) sfx('DOKI!', document.querySelector('[data-sfx="like"]'));
     const patch = liked
       ? { likedAt: undefined, favorites: image.favorites - 1, albums: (image.albums ?? []).filter((a) => !a.isDefault) }
       : { likedAt: nowIso(), favorites: image.favorites + 1 };
@@ -527,6 +548,7 @@ const ImageView = ({ id }: { id: string }) => {
               <button
                   type="button"
                   onClick={handleLike}
+                  data-sfx="like"
                   disabled={isLiking}
                   aria-pressed={!!image.likedAt}
                   aria-label={`${image.likedAt ? 'Remove from favorites' : 'Add to favorites'} (${image.favorites} favorites)`}
@@ -623,8 +645,19 @@ const ImageView = ({ id }: { id: string }) => {
                       <span className="size-3.5 rounded-full ring-1 ring-border" style={{ backgroundColor: tint }} aria-hidden="true" />
                       {tint}
                     </button>
+                    {normalizeHex(tint) && (
+                      <Link
+                        to={`/gallery?${new URLSearchParams({ color: normalizeHex(tint)!, ...(image.isNsfw && consented ? { isNsfw: NsfwMode.All } : {}) })}`}
+                        title="Find images with a similar color"
+                        aria-label="Find images with a similar color"
+                        className="ml-1 inline-grid size-7 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                      >
+                        <Palette size={15} aria-hidden="true" />
+                      </Link>
+                    )}
                   </StatRow>
                 )}
+                {!needsConsent && <ColorPalette url={image.url} allowNsfw={image.isNsfw && consented} />}
                 <StatRow label="Status"><StatusBadge label={status.label} tone={status.tone} /></StatRow>
                 {image.source && (
                   <StatRow label="Source">
@@ -741,6 +774,7 @@ const ImageView = ({ id }: { id: string }) => {
         </div>
 
         {!needsConsent && <RelatedImages image={image} allowNsfw={consented} />}
+        {!needsConsent && <SimilarImages image={image} allowNsfw={consented} />}
 
         {isViewerOpen && !needsConsent && (
             <Lightbox

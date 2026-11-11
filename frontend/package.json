@@ -13,6 +13,8 @@
   "dependencies": {
     "@fontsource-variable/m-plus-1": "^5.3.1",
     "@fontsource-variable/m-plus-1-code": "^5.3.1",
+    "@fontsource/dela-gothic-one": "^5.3.0",
+    "@fontsource/zen-kaku-gothic-new": "^5.3.1",
     "@fontsource/zen-maru-gothic": "^5.3.1",
     "@tanstack/react-query": "^5.105.0",
     "axios": "^1.21.0",

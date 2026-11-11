@@ -60,6 +60,11 @@ type imageFilter struct {
 	excludedArtists          []string
 	includedIDs              []int64
 	excludedIDs              []int64
+	color                    *rgbColor
+	colorTolerance           int
+	uploadedAfter            *time.Time
+	uploadedBefore           *time.Time
+	mine                     bool
 }
 
 func (s *Server) parseImageFilters(r *http.Request, ident *auth.Identity) (*imageFilter, error) {
@@ -86,7 +91,7 @@ func (s *Server) parseImageFilters(r *http.Request, ident *auth.Identity) (*imag
 	if f.isAnimated, err = enum("isAnimated", "All", "All", "True", "False"); err != nil {
 		return nil, err
 	}
-	if f.orderBy, err = enum("orderBy", "Random", "Random", "UploadedAt", "Favorites", "AddedToAlbum"); err != nil {
+	if f.orderBy, err = enum("orderBy", "Random", "Random", "UploadedAt", "Favorites", "Trending", "AddedToAlbum"); err != nil {
 		return nil, err
 	}
 	if f.orientation, err = enum("orientation", "All", "All", "Landscape", "Portrait", "Square"); err != nil {
@@ -100,6 +105,7 @@ func (s *Server) parseImageFilters(r *http.Request, ident *auth.Identity) (*imag
 	}
 
 	f.includeMyPending = queryBool(r, "includeMyPending", false)
+	f.mine = queryBool(r, "mine", false)
 	f.includeMyPendingChildren = queryBool(r, "includeMyPendingChildren", false)
 
 	f.width = strings.TrimSpace(queryGet(r, "width"))
@@ -124,6 +130,37 @@ func (s *Server) parseImageFilters(r *http.Request, ident *auth.Identity) (*imag
 	}
 	if f.excludedIDs, err = s.idListParam(r, "excludedIds"); err != nil {
 		return nil, toBad(err)
+	}
+
+	if v := strings.TrimSpace(queryGet(r, "color")); v != "" {
+		c, ok := parseHexColor(v)
+		if !ok {
+			return nil, errFieldValidation("color", "The color must be a hex value such as #F4A6C1.")
+		}
+		f.color = &c
+		f.colorTolerance = defaultColorTolerance
+		if t := strings.TrimSpace(queryGet(r, "colorTolerance")); t != "" {
+			n, err := strconv.Atoi(t)
+			if err != nil || n < 1 || n > 100 {
+				return nil, errFieldValidation("colorTolerance", "The color tolerance must be a whole number between 1 and 100.")
+			}
+			f.colorTolerance = n
+		}
+	}
+	for _, key := range []string{"uploadedAfter", "uploadedBefore"} {
+		v := strings.TrimSpace(queryGet(r, key))
+		if v == "" {
+			continue
+		}
+		t, ok := parseTimeParam(v)
+		if !ok {
+			return nil, errFieldValidation(key, fmt.Sprintf("The value '%s' is not a valid date or ISO 8601 timestamp.", truncateRunes(v, 64)))
+		}
+		if key == "uploadedAfter" {
+			f.uploadedAfter = &t
+		} else {
+			f.uploadedBefore = &t
+		}
 	}
 
 	if up := queryGet(r, "uploaderId"); up != "" && isModerator(ident) {
@@ -263,7 +300,7 @@ func buildResolvedImageConds(rf *resolvedImageFilter, ident *auth.Identity, albu
 	var conds []string
 	a := &sqlArgs{offset: argOffset}
 
-	if rf.impossible {
+	if rf.impossible || (f.mine && ident == nil) {
 		return "FALSE", nil
 	}
 
@@ -327,6 +364,18 @@ func buildResolvedImageConds(rf *resolvedImageFilter, ident *auth.Identity, albu
 
 	if albumID == nil && f.uploaderID != nil {
 		conds = append(conds, fmt.Sprintf(`i."UploaderId" = %s`, a.add(*f.uploaderID)))
+	}
+	if f.mine {
+		conds = append(conds, fmt.Sprintf(`i."UploaderId" = %s`, a.add(ident.UserID)))
+	}
+	if f.uploadedAfter != nil {
+		conds = append(conds, fmt.Sprintf(`i."UploadedAt" > %s`, a.add(*f.uploadedAfter)))
+	}
+	if f.uploadedBefore != nil {
+		conds = append(conds, fmt.Sprintf(`i."UploadedAt" < %s`, a.add(*f.uploadedBefore)))
+	}
+	if f.color != nil {
+		conds = append(conds, colorCondition(*f.color, f.colorTolerance, a))
 	}
 
 	if len(f.includedIDs) == 1 {
@@ -507,7 +556,7 @@ func (s *Server) handleGetImage(w http.ResponseWriter, r *http.Request) {
 		}
 		return rowErr
 	})
-	children := queueImageChildren(b, []int64{id}, opts)
+	children := s.queueImageChildren(b, []int64{id}, opts)
 	err = s.db.SendBatch(r.Context(), b).Close()
 	if err == nil {
 		err = rowErr

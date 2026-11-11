@@ -489,3 +489,24 @@
   scroll-behavior: auto !important;
   transition-duration: 0.01ms !important;
 }
+
+@keyframes coach-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--brand) 60%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 0.85rem color-mix(in oklab, var(--brand) 0%, transparent);
+  }
+}
+
+:root[data-coach] .theme-menu-trigger {
+  color: var(--brand-ink);
+  background-color: var(--brand-soft);
+  animation: coach-pulse 1.6s ease-out infinite;
+}
+
+:root[data-coach][data-motion='off'] .theme-menu-trigger {
+  animation: none;
+  box-shadow: 0 0 0 2px var(--brand);
+}

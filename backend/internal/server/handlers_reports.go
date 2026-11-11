@@ -164,7 +164,7 @@ func (s *Server) attachReportImages(ctx context.Context, ident *auth.Identity, r
 		}
 		return rows.Err()
 	})
-	children := queueImageChildren(b, ids, opts)
+	children := s.queueImageChildren(b, ids, opts)
 	if err := s.db.SendBatch(ctx, b).Close(); err != nil {
 		return err
 	}

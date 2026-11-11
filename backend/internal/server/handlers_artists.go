@@ -39,6 +39,8 @@ const artistUsageQuery = `
 
 const artistListColumns = `a."Id", a."Name", a."Patreon", a."Pixiv", a."Twitter", a."DeviantArt", a."ReviewStatus", a."CreatorId", COALESCE(ac.cnt, 0)`
 
+const artistRowColumns = `a."Id", a."Name", a."Patreon", a."Pixiv", a."Twitter", a."DeviantArt", a."ReviewStatus", a."CreatorId", 0::bigint`
+
 func scanArtistRows(rows pgx.Rows, ident *auth.Identity) ([]artistDto, error) {
 	defer rows.Close()
 	items := []artistDto{}
@@ -88,11 +90,13 @@ func (s *Server) handleListArtists(w http.ResponseWriter, r *http.Request) {
 		}
 		a := &sqlArgs{}
 		join := artistCountJoin
+		columns := artistListColumns
 		if usage != nil {
-			join = usageJoin("ac", "a", a.add(usage.ids), a.add(usage.counts))
+			join = ""
+			columns = artistRowColumns
 		}
 		vis, _ := lookupVisibility(r, ident, "a", a)
-		rows, err := s.db.Query(ctx, `SELECT `+artistListColumns+` FROM "Artists" a`+join+
+		rows, err := s.db.Query(ctx, `SELECT `+columns+` FROM "Artists" a`+join+
 			` WHERE a."Id" = ANY(`+a.add(includedIDs)+`) AND `+vis+` ORDER BY a."Id"`, a.args...)
 		if err != nil {
 			InternalError(w, r, s.log, err)
@@ -102,6 +106,11 @@ func (s *Server) handleListArtists(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			InternalError(w, r, s.log, err)
 			return
+		}
+		if usage != nil {
+			for i := range items {
+				items[i].ImageCount = usage.byID[items[i].ID]
+			}
 		}
 		writePublicJSON(w, r, s.newPaginated(items, 1, len(items), int64(len(items)), s.cfg.PageSizes.ArtistMax, s.cfg.PageSizes.ArtistDefault))
 		return
@@ -127,13 +136,43 @@ func (s *Server) handleListArtists(w http.ResponseWriter, r *http.Request) {
 		InternalError(w, r, s.log, err)
 		return
 	}
+	if usage != nil {
+		idArgs := &sqlArgs{}
+		where := filter(idArgs)
+		cacheKey := ""
+		if name == "" && len(idArgs.args) == 0 {
+			cacheKey = "artists" + where
+		}
+		pageIDs, total, err := s.rankedPage(ctx, cacheKey, `SELECT a."Id" FROM "Artists" a`+where, idArgs.args, usage, page, pageSize)
+		if err != nil {
+			InternalError(w, r, s.log, err)
+			return
+		}
+		items := []artistDto{}
+		if len(pageIDs) > 0 {
+			rows, err := s.db.Query(ctx, `SELECT `+artistRowColumns+` FROM "Artists" a WHERE a."Id" = ANY($1)`, pageIDs)
+			if err != nil {
+				InternalError(w, r, s.log, err)
+				return
+			}
+			scanned, err := scanArtistRows(rows, ident)
+			if err != nil {
+				InternalError(w, r, s.log, err)
+				return
+			}
+			items = orderByIDs(pageIDs, scanned, func(a artistDto) int64 { return a.ID })
+			for i := range items {
+				items[i].ImageCount = usage.byID[items[i].ID]
+			}
+		}
+		writePublicJSON(w, r, s.newPaginated(items, page, pageSize, total, s.cfg.PageSizes.ArtistMax, s.cfg.PageSizes.ArtistDefault))
+		return
+	}
+
 	countArgs := &sqlArgs{}
 	countWhere := filter(countArgs)
 	listArgs := &sqlArgs{}
 	join := artistCountAggregateJoin
-	if usage != nil {
-		join = usageJoin("ac", "a", listArgs.add(usage.ids), listArgs.add(usage.counts))
-	}
 	listWhere := filter(listArgs)
 
 	var total int64

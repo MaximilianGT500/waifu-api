@@ -27,6 +27,12 @@ export interface ImageFilters {
   enabled?: boolean;
   uploaderId?: string;
   reviewStatus?: ReviewStatusFilter;
+  color?: string;
+  colorTolerance?: string;
+  uploadedAfter?: string;
+  uploadedBefore?: string;
+  mine?: boolean;
+  includeMyPending?: boolean;
 }
 
 const PREFETCH_FRESH_MS = 30_000;
@@ -48,6 +54,12 @@ async function fetchImages(filters: ImageFilters, user: User | null, signal?: Ab
       pageSize: filters.pageSize,
       uploaderId: filters.uploaderId,
       reviewStatus: filters.reviewStatus,
+      color: filters.color,
+      colorTolerance: filters.colorTolerance,
+      uploadedAfter: filters.uploadedAfter,
+      uploadedBefore: filters.uploadedBefore,
+      mine: filters.mine || undefined,
+      includeMyPending: filters.includeMyPending || undefined,
       includeMyPendingChildren,
     },
     arrays: {

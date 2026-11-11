@@ -51,7 +51,7 @@ const Notification = ({ id, type, message, onClose, duration }: NotificationProp
       onMouseLeave={() => setPaused(false)}
       onFocus={() => setPaused(true)}
       onBlur={() => setPaused(false)}
-      className="flex w-full items-start gap-3 rounded-[1.25rem] bg-popover p-3 pr-2.5 text-popover-foreground shadow-float ring-1 ring-border animate-in fade-in slide-in-from-bottom-4 duration-300 sm:w-[22rem] dark:ring-white/8"
+      className="toast relative flex w-full items-start gap-3 rounded-[1.25rem] bg-popover p-3 pr-2.5 text-popover-foreground shadow-float ring-1 ring-border animate-in fade-in slide-in-from-bottom-4 duration-300 sm:w-[22rem] dark:ring-white/8"
     >
       <span className={`grid size-8 shrink-0 place-items-center rounded-full ${className}`} aria-hidden="true">
         <Icon size={17} strokeWidth={2.2} />

@@ -12,3 +12,10 @@ export function writeLocal(key: string, value: string): void {
     } catch {
     }
 }
+
+export function removeLocal(key: string): void {
+    try {
+        localStorage.removeItem(key);
+    } catch {
+    }
+}

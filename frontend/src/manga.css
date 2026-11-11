@@ -1,0 +1,385 @@
+:root[data-design='manga'] {
+  color-scheme: light;
+  --font-sans: 'Zen Kaku Gothic New', 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'BIZ UDPGothic', 'Yu Gothic UI', Meiryo, system-ui, sans-serif;
+  --font-display: 'Dela Gothic One', 'Zen Kaku Gothic New', 'Hiragino Kaku Gothic ProN', system-ui, sans-serif;
+  --ink: #141416;
+  --paper: #fffdf8;
+  --tone: rgb(20 20 22 / 0.14);
+  --ink-shadow: #141416;
+  --canvas: #efece4;
+  --background: #fffdf8;
+  --foreground: #141416;
+  --card: #ffffff;
+  --card-foreground: #141416;
+  --popover: #ffffff;
+  --popover-foreground: #141416;
+  --primary: #141416;
+  --primary-foreground: #fffdf8;
+  --secondary: #f1eee6;
+  --secondary-foreground: #141416;
+  --muted: #f1eee6;
+  --muted-foreground: #55545a;
+  --accent: #f1eee6;
+  --accent-foreground: #141416;
+  --border: #141416;
+  --input: #141416;
+  --sleeve: #f4f1e9;
+  --tab: #fffdf8;
+  --tab-hover: #f1eee6;
+  --inset: transparent;
+  --shadow-card: 0 0 0 1.5px var(--ink), 2px 2px 0 1.5px var(--ink-shadow);
+  --shadow-lift: 0 0 0 2px var(--ink), 5px 5px 0 2px var(--ink-shadow);
+  --shadow-sheet: 0 0 0 2.5px var(--ink), 8px 8px 0 2.5px var(--ink-shadow);
+  --shadow-float: 0 0 0 2px var(--ink), 5px 5px 0 2px var(--ink-shadow);
+  --radius-control: 0.5rem;
+  --radius-panel: 0.625rem;
+  --radius-media: 0.375rem;
+  --radius-sheet: 0.875rem;
+}
+
+:root[data-design='manga'].dark {
+  color-scheme: dark;
+  --ink: #e9e7e1;
+  --paper: #131315;
+  --tone: rgb(233 231 225 / 0.075);
+  --ink-shadow: color-mix(in oklab, var(--brand) 64%, #000);
+  --canvas: #0c0c0e;
+  --background: #131315;
+  --foreground: #f2f0ea;
+  --card: #19191c;
+  --card-foreground: #f2f0ea;
+  --popover: #19191c;
+  --popover-foreground: #f2f0ea;
+  --primary: #f2f0ea;
+  --primary-foreground: #131315;
+  --secondary: #232327;
+  --secondary-foreground: #f2f0ea;
+  --muted: #232327;
+  --muted-foreground: #aaa8b0;
+  --accent: #232327;
+  --accent-foreground: #f2f0ea;
+  --border: #d7d5cf;
+  --input: #d7d5cf;
+  --sleeve: #0f0f11;
+  --tab: #131315;
+  --tab-hover: #1e1e21;
+}
+
+:root[data-design='manga'] body {
+  font-weight: 500;
+  letter-spacing: 0.005em;
+}
+
+:root[data-design='manga'] .bg-canvas {
+  background-color: transparent;
+}
+
+:root[data-design='manga'] .bg-canvas::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: radial-gradient(var(--tone) 1px, transparent 1.5px);
+  background-size: 7px 7px;
+}
+
+:root[data-design='manga'] body {
+  background-color: transparent;
+}
+
+@media (max-width: 1023px) {
+  :root[data-design='manga'] header.sticky {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background-color: var(--canvas);
+    box-shadow: 0 2px 0 var(--ink);
+  }
+}
+
+:root[data-design='manga'] :is(h1, h2, .page-title, .section-title, .brand-title):not(.text-sm, .text-xs) {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-synthesis: none;
+  letter-spacing: 0.01em;
+}
+
+:root[data-design='manga'] :is(h1, .page-title) {
+  text-shadow: 0.06em 0.06em 0 color-mix(in oklab, var(--brand) 50%, transparent);
+}
+
+:root[data-design='manga'] .text-gradient-waifu {
+  background-image:
+    radial-gradient(circle, color-mix(in oklab, var(--brand) 45%, var(--ink)) 30%, transparent 34%),
+    linear-gradient(var(--brand), var(--brand));
+  background-size: 0.15em 0.15em, auto;
+  -webkit-text-stroke: 0.022em var(--ink);
+  text-shadow: none;
+}
+
+:root[data-design='manga'] .text-gradient-api {
+  background-image: linear-gradient(transparent 58%, color-mix(in oklab, var(--brand) 38%, transparent) 58%, color-mix(in oklab, var(--brand) 38%, transparent) 92%, transparent 92%);
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  color: var(--foreground);
+  text-shadow: none;
+}
+
+:root[data-design='manga'] ::selection {
+  background-color: color-mix(in oklab, var(--brand) 38%, transparent);
+}
+
+:root[data-design='manga'] #main-content {
+  border-radius: 0.75rem;
+  box-shadow: 0 0 0 2.5px var(--ink), 5px 5px 0 2.5px var(--ink-shadow);
+}
+
+@media (min-width: 640px) {
+  :root[data-design='manga'] #main-content {
+    box-shadow: var(--shadow-sheet);
+  }
+}
+
+:root[data-design='manga'] .panel,
+:root[data-design='manga'] .shadow-float {
+  box-shadow: 0 0 0 2px var(--ink), 4px 4px 0 2px var(--ink-shadow);
+}
+
+:root[data-design='manga'] .panel {
+  border-radius: var(--radius-panel);
+}
+
+:root[data-design='manga'] .btn {
+  border-radius: 0.5rem;
+  font-weight: 800;
+}
+
+:root[data-design='manga'] :is(.btn-primary, .btn-accent, .btn-secondary, .btn-danger) {
+  box-shadow: 0 0 0 2px var(--ink), 3px 3px 0 2px var(--ink-shadow);
+  transition: transform 120ms ease, box-shadow 120ms ease, background-color 150ms ease, color 150ms ease;
+}
+
+:root[data-design='manga'] :is(.btn-primary, .btn-accent, .btn-secondary, .btn-danger):hover:not(:disabled, [aria-disabled='true']) {
+  transform: translate(-1px, -1px);
+  box-shadow: 0 0 0 2px var(--ink), 4px 4px 0 2px var(--ink-shadow);
+}
+
+:root[data-design='manga'] :is(.btn-primary, .btn-accent, .btn-secondary, .btn-danger):active:not(:disabled, [aria-disabled='true']) {
+  transform: translate(2px, 2px);
+  box-shadow: 0 0 0 2px var(--ink), 1px 1px 0 2px var(--ink-shadow);
+}
+
+:root[data-design='manga'] .btn-secondary:hover:not(:disabled) {
+  background-color: var(--secondary);
+}
+
+:root[data-design='manga'] .btn-accent {
+  color: var(--vivid-foreground);
+}
+
+:root[data-design='manga'] .input {
+  border-width: 2px;
+  border-color: var(--ink);
+  border-radius: 0.5rem;
+}
+
+:root[data-design='manga'] .input:focus {
+  border-color: var(--ink);
+  box-shadow: 3px 3px 0 0 var(--brand);
+}
+
+:root[data-design='manga'] .sticker {
+  box-shadow: 0 0 0 1.5px var(--ink), 2px 2px 0 1.5px var(--ink-shadow);
+}
+
+:root[data-design='manga'] .chip {
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+}
+
+:root[data-design='manga'] .sleeve {
+  border-radius: 0.625rem;
+  background-color: var(--sleeve);
+  box-shadow: inset 0 0 0 2px var(--ink);
+}
+
+:root[data-design='manga'] .index-tab {
+  border-radius: 0.5rem 0 0 0.5rem;
+  background-color: var(--tab);
+  box-shadow: inset 2px 2px 0 var(--ink), inset 0 -2px 0 var(--ink);
+}
+
+:root[data-design='manga'] .index-tab:hover {
+  background-color: var(--tab-hover);
+}
+
+:root[data-design='manga'] .index-tab[aria-current='page'] {
+  background-color: var(--ink);
+  color: var(--paper);
+  box-shadow: inset 4px 0 0 var(--brand);
+}
+
+:root[data-design='manga'] .nav-item {
+  border-radius: 0.5rem;
+}
+
+:root[data-design='manga'] .nav-item[aria-current='page'] {
+  background-color: var(--ink);
+  color: var(--paper);
+}
+
+:root[data-design='manga'] .holo-card {
+  transform: perspective(56rem);
+}
+
+:root[data-design='manga'] .card-shell {
+  content-visibility: visible;
+}
+
+:root[data-design='manga'] .card-shell img {
+  transition: none;
+}
+
+:root[data-design='manga'] .card-shell[data-featured] {
+  grid-column: span 2;
+  grid-row: span 2;
+}
+
+:root[data-design='manga'] .card-shell[data-featured] > .holo-card {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+:root[data-design='manga'] .card-shell[data-featured] > .holo-card > a {
+  flex: 1 1 0;
+  min-height: 0;
+  aspect-ratio: auto !important;
+}
+
+:root[data-design='manga'] .card-shell[data-featured] > .holo-card > a > img {
+  position: absolute;
+  inset: 0;
+}
+
+:root[data-design='manga'] .card-shell > .holo-card {
+  border-radius: 0.5rem;
+  box-shadow: 0 0 0 2px var(--ink), 3px 3px 0 2px var(--ink-shadow);
+  transition: translate 150ms ease, box-shadow 150ms ease;
+}
+
+:root[data-design='manga'] .card-shell > .holo-card:hover {
+  translate: -2px -2px;
+  box-shadow: 0 0 0 2px var(--ink), 6px 6px 0 2px var(--ink-shadow);
+}
+
+:root[data-design='manga'] .card-shell > .holo-card > a {
+  border-radius: 0.3rem;
+}
+
+:root[data-design='manga'] .holo-foil {
+  inset: -50%;
+  border-radius: 0;
+  mix-blend-mode: normal;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-100 -100 200 200'%3E%3Cpath fill='%23111113' d='M56.2 -0.2L150.0 -2.1L150.0 1.2ZM47.9 3.9L149.6 10.5L149.4 13.6ZM48.6 7.1L148.6 20.2L148.2 23.3ZM39.8 10.9L144.9 38.7L144.5 40.2ZM48.3 15.2L143.7 43.0L142.4 47.1ZM53.0 21.4L140.0 53.9L138.1 58.6ZM33.1 18.3L132.1 71.1L130.3 74.2ZM30.2 18.5L128.9 76.8L127.2 79.6ZM27.8 20.8L120.8 88.9L119.5 90.7ZM40.0 36.6L111.6 100.3L109.6 102.4ZM31.1 33.9L102.8 109.2L100.1 111.7ZM24.7 32.4L92.1 118.4L89.7 120.2ZM28.2 46.2L80.2 126.7L75.9 129.4ZM18.4 35.0L70.7 132.3L68.6 133.4ZM21.7 47.7L62.7 136.2L61.4 136.9ZM14.3 40.8L51.7 140.8L47.5 142.3ZM7.4 33.2L34.8 145.9L30.4 146.9ZM8.3 44.5L29.7 147.0L25.0 147.9ZM1.9 35.7L9.2 149.7L6.5 149.9ZM-0.3 40.5L0.9 150.0L-3.3 150.0ZM-3.2 57.0L-7.3 149.8L-9.8 149.7ZM-7.2 39.3L-26.3 147.7L-27.9 147.4ZM-11.7 51.8L-32.5 146.4L-33.9 146.1ZM-13.7 42.6L-44.2 143.3L-47.4 142.3ZM-14.3 34.3L-55.7 139.3L-59.4 137.7ZM-21.3 38.6L-71.9 131.7L-73.3 130.9ZM-30.5 48.5L-78.8 127.6L-80.7 126.4ZM-34.8 42.9L-93.4 117.3L-95.3 115.8ZM-36.2 40.8L-98.5 113.1L-100.6 111.3ZM-42.8 38.7L-110.7 101.2L-111.8 100.0ZM-40.9 33.0L-116.0 95.1L-117.4 93.4ZM-29.7 19.9L-124.0 84.4L-125.3 82.4ZM-34.5 19.9L-129.2 76.3L-130.9 73.3ZM-41.2 17.8L-137.2 60.6L-138.3 58.2ZM-45.6 14.2L-142.8 46.1L-143.7 43.1ZM-36.7 8.4L-146.0 34.4L-146.4 32.5ZM-39.6 5.6L-148.2 23.1L-148.8 18.7ZM-56.3 5.8L-149.0 17.3L-149.4 13.3ZM-55.2 1.1L-149.9 5.3L-150.0 0.4ZM-36.3 -3.3L-149.5 -11.9L-149.3 -14.8ZM-39.4 -5.4L-148.9 -17.9L-148.3 -22.8ZM-51.9 -13.9L-145.2 -37.6L-144.6 -39.8ZM-36.1 -12.6L-142.0 -48.5L-141.2 -50.7ZM-35.9 -16.4L-136.8 -61.5L-136.2 -62.8ZM-42.8 -23.4L-132.7 -69.9L-130.6 -73.9ZM-32.9 -20.8L-128.0 -78.3L-125.4 -82.3ZM-36.1 -26.4L-121.8 -87.6L-120.4 -89.4ZM-32.3 -28.1L-113.7 -97.8L-112.5 -99.2ZM-28.8 -31.5L-101.7 -110.2L-100.5 -111.4ZM-29.6 -40.0L-91.2 -119.1L-87.2 -122.1ZM-20.1 -31.5L-82.0 -125.6L-79.1 -127.5ZM-28.0 -48.3L-75.8 -129.5L-74.7 -130.1ZM-13.5 -31.8L-60.8 -137.1L-56.2 -139.1ZM-16.3 -48.9L-48.9 -141.8L-46.0 -142.8ZM-9.2 -34.6L-40.9 -144.3L-36.0 -145.6ZM-9.0 -54.9L-26.3 -147.7L-22.2 -148.3ZM-3.6 -52.9L-12.1 -149.5L-8.2 -149.8ZM1.3 -50.4L2.6 -150.0L5.2 -149.9ZM4.7 -43.8L13.9 -149.4L18.4 -148.9ZM8.7 -46.9L25.1 -147.9L29.6 -147.0ZM12.1 -46.4L36.7 -145.5L39.3 -144.8ZM16.3 -46.6L49.0 -141.8L50.4 -141.3ZM22.1 -46.5L62.4 -136.4L66.6 -134.4ZM22.5 -42.3L68.7 -133.4L72.3 -131.5ZM19.6 -30.2L79.7 -127.1L83.4 -124.7ZM30.3 -37.7L93.5 -117.3L94.5 -116.5ZM34.3 -37.4L100.7 -111.2L102.2 -109.8ZM41.3 -38.0L109.1 -102.9L111.6 -100.3ZM32.1 -25.8L116.6 -94.4L117.3 -93.5ZM32.1 -20.5L125.9 -81.5L127.0 -79.8ZM39.8 -20.2L132.8 -69.7L134.5 -66.3ZM46.3 -18.9L138.3 -58.0L139.3 -55.7ZM50.1 -18.3L140.4 -52.7L141.4 -50.0ZM42.2 -9.5L145.8 -35.3L146.8 -30.8ZM36.8 -5.9L147.9 -25.1L148.3 -22.7ZM54.2 -4.5L149.3 -14.6L149.7 -10.2Z'/%3E%3C/svg%3E");
+  background-size: cover;
+  background-position: center;
+  transform: translate(calc((var(--mx) - 50%) / 2), calc((var(--my) - 50%) / 2));
+  transition: opacity 180ms ease;
+}
+
+:root[data-design='manga'] .holo-card[data-tilting] .holo-foil {
+  will-change: transform;
+}
+
+:root[data-design='manga'] .holo-card:hover .holo-foil,
+:root[data-design='manga'] .holo-card:focus-within .holo-foil,
+:root[data-design='manga'] .holo-card[data-tilting] .holo-foil,
+:root[data-design='manga'] .holo-foil[data-always] {
+  opacity: 0.55;
+}
+
+:root[data-design='manga'] .card-back {
+  background-color: var(--brand);
+  background-image: radial-gradient(circle, var(--ink) 24%, transparent 27%);
+  background-size: 9px 9px;
+}
+
+:root[data-design='manga'] .toast {
+  border-radius: 1.5rem;
+  box-shadow: 0 0 0 2px var(--ink), 4px 4px 0 2px var(--ink-shadow);
+}
+
+:root[data-design='manga'] .toast::before,
+:root[data-design='manga'] .toast::after {
+  content: '';
+  position: absolute;
+  right: 2.4rem;
+  width: 1.25rem;
+  height: 0.9rem;
+  clip-path: polygon(0 0, 100% 0, 78% 100%);
+  pointer-events: none;
+}
+
+:root[data-design='manga'] .toast::before {
+  bottom: -0.95rem;
+  background-color: var(--ink);
+  translate: 0.18rem 0;
+  scale: 1.32 1.12;
+  transform-origin: top;
+}
+
+:root[data-design='manga'] .toast::after {
+  bottom: -0.78rem;
+  background-color: var(--popover);
+}
+
+:root[data-design='manga'] .sfx {
+  position: fixed;
+  z-index: 120;
+  pointer-events: none;
+  font-family: var(--font-display);
+  font-size: clamp(1.9rem, 4.5vw, 3rem);
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--brand);
+  -webkit-text-stroke: 0.07em var(--ink);
+  paint-order: stroke fill;
+  text-shadow: 0.07em 0.07em 0 var(--ink);
+  translate: -50% -90%;
+  rotate: var(--tilt, -6deg);
+  animation: sfx-pop 900ms cubic-bezier(0.2, 1.3, 0.4, 1) forwards;
+}
+
+@keyframes sfx-pop {
+  0% {
+    scale: 0.3;
+    opacity: 0;
+  }
+  22% {
+    scale: 1.18;
+    opacity: 1;
+  }
+  55% {
+    scale: 1;
+    opacity: 1;
+    translate: -50% -120%;
+  }
+  100% {
+    scale: 1.04;
+    opacity: 0;
+    translate: -50% -150%;
+  }
+}
+
+:root[data-design='manga'] ::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklab, var(--ink) 55%, transparent);
+}
+
+@media (forced-colors: active) {
+  :root[data-design='manga'] .text-gradient-waifu,
+  :root[data-design='manga'] .text-gradient-api {
+    background-image: none;
+    -webkit-text-stroke: 0;
+    color: CanvasText;
+  }
+}

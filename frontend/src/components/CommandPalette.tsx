@@ -2,7 +2,7 @@ import { ReactNode, useEffect, useEffectEvent, useId, useRef, useState, Keyboard
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowRight, Bookmark, Hash, Keyboard, Loader2, LucideIcon, Moon, Palette, Search, Shuffle, Sun, Tag as TagIcon } from 'lucide-react';
+import { ArrowRight, Bookmark, Brush, Flame, Hash, Keyboard, Loader2, LucideIcon, Moon, Palette, Search, Shuffle, Sun, Tag as TagIcon } from 'lucide-react';
 import api from '../services/api';
 import { Artist, ImageDto, ImageOrderBy, PaginatedList, Tag } from '../types';
 import { useDebounce } from '../hooks/useDebounce';
@@ -10,6 +10,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useNotification } from '../context/NotificationContext';
 import { useSavedSearches } from '../hooks/useSavedSearches';
 import { savedSearchHref } from '../utils/savedSearches';
+import { openWelcome } from '../utils/welcome';
 
 export interface PaletteDestination {
     key: string;
@@ -145,6 +146,8 @@ const CommandPalette = ({ onClose, destinations, onShowShortcuts }: CommandPalet
             icon: resolvedTheme === 'dark' ? <Sun size={16} /> : <Moon size={16} />,
             run: () => { setTheme(resolvedTheme === 'dark' ? 'light' : 'dark'); onClose(); },
         },
+        { id: 'action-trending', group: 'Actions', label: 'Show what is trending this week', icon: <Flame size={16} />, run: () => go(`/gallery?orderBy=${ImageOrderBy.Trending}`) },
+        { id: 'action-look', group: 'Actions', label: 'Change the design and colors', icon: <Brush size={16} />, run: () => { onClose(); openWelcome(); } },
         { id: 'action-shortcuts', group: 'Actions', label: 'Keyboard shortcuts', icon: <Keyboard size={16} />, run: () => { onClose(); onShowShortcuts(); } },
     ];
     for (const action of actions) {

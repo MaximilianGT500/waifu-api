@@ -8,6 +8,7 @@ const QUERY_PARAMS = [
     'isNsfw', 'orientation', 'isAnimated', 'width', 'height', 'byteSize',
     'includedTags', 'excludedTags', 'includedArtists', 'excludedArtists',
     'includedIds', 'excludedIds', 'uploaderId', 'reviewStatus', 'orderBy',
+    'color', 'colorTolerance', 'since', 'uploadedAfter', 'uploadedBefore',
 ];
 
 export interface SavedSearch {
@@ -98,4 +99,8 @@ export function renameSavedSearch(id: string, name: string): void {
 
 export function removeSavedSearch(id: string): void {
     save(getSavedSearches().filter((item) => item.id !== id));
+}
+
+export function clearSavedSearches(): void {
+    save([]);
 }

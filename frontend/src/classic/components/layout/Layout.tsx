@@ -5,7 +5,7 @@ import {
     Sun, Moon, Menu, X, LogOut, Upload as UploadIcon,
     Home, Image as ImageIcon, Tag as TagIcon, PanelLeftClose, PanelLeftOpen,
     User as UserIcon, Library, ChevronDown, Palette, Key, Users as UsersIcon, Flag, BarChart, Monitor, Book, Mail, Activity, HardDrive, FolderGit2, FileText, GitPullRequest, Megaphone, Scale, ShieldCheck,
-    LucideIcon, Sparkles, History, WandSparkles,
+    LucideIcon, Sparkles, History, WandSparkles, BookOpen,
 } from 'lucide-react';
 import { useState, useEffect, useRef, Suspense, ReactNode, ButtonHTMLAttributes } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -14,6 +14,8 @@ import { Dropdown, DropdownTrigger, DropdownItem, DropdownLabel, DropdownSeparat
 import { getEnv } from '../../../utils/env';
 import { DESIGNS, currentDesign, switchDesign } from '../../../utils/design';
 import { ACCENTS } from '../../../utils/accent';
+import { flashCoachMark, takeDesignHint } from '../../../utils/welcome';
+import { useNotification } from '../../../context/NotificationContext';
 import { Role } from '../../../types';
 import { useNavBadges, invalidateNavBadges } from '../../../hooks/useNavBadges';
 import { usePermissions } from '../../../hooks/useBanner';
@@ -117,6 +119,17 @@ const Layout = () => {
     const design = currentDesign();
     const { user, token, logout } = useAuth();
     const location = useLocation();
+    const { showNotification } = useNotification();
+
+    const [isDesignHintShown, setIsDesignHintShown] = useState(false);
+
+    useEffect(() => {
+        if (!takeDesignHint()) return;
+        setIsDesignHintShown(true);
+        showNotification('info', 'Classic design selected. Switch the design, colors and effects at any time with the sun/moon button at the top right.');
+    }, [showNotification]);
+
+    useEffect(() => (isDesignHintShown ? flashCoachMark(12_000) : undefined), [isDesignHintShown]);
 
     const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
     const [drawerPath, setDrawerPath] = useState<string | null>(null);
@@ -321,7 +334,7 @@ const Layout = () => {
                                 width="w-[17rem]"
                                 label="Change color theme, accent, design and effects"
                                 trigger={
-                                    <DropdownTrigger className="grid size-10 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground">
+                                    <DropdownTrigger className="theme-menu-trigger grid size-10 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground">
                                         {resolvedTheme === 'light' ? <Sun size={19} aria-hidden="true" /> : <Moon size={19} aria-hidden="true" />}
                                     </DropdownTrigger>
                                 }
@@ -345,7 +358,7 @@ const Layout = () => {
                                 <div role="group" aria-label="Design">
                                     <DropdownLabel>Design</DropdownLabel>
                                     {DESIGNS.map(({ id, label }) => (
-                                        <DropdownItem key={id} onClick={() => switchDesign(id)} active={design === id} icon={id === 'collector' ? <Sparkles size={16} /> : <History size={16} />}>{label}</DropdownItem>
+                                        <DropdownItem key={id} onClick={() => switchDesign(id)} active={design === id} icon={id === 'collector' ? <Sparkles size={16} /> : id === 'manga' ? <BookOpen size={16} /> : <History size={16} />}>{label}</DropdownItem>
                                     ))}
                                 </div>
                                 <DropdownSeparator />

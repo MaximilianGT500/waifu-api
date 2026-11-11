@@ -13,8 +13,10 @@ import TagChip from '../components/TagChip';
 import { safeColor } from '../utils/color';
 import { useHolo } from '../hooks/useHolo';
 import { effectsEnabled } from '../utils/motion';
+import { sfx } from '../utils/sfx';
 import PopularTags from '../components/PopularTags';
 import RecentlyViewed from '../components/RecentlyViewed';
+import { ColorRow, NewSinceVisit, TrendingRow } from '../components/HomeDiscovery';
 
 interface PublicStats {
     totalRequests: number;
@@ -233,6 +235,7 @@ const Home = () => {
 
     const draw = () => {
         if (drawing) return;
+        sfx('BAM!', document.querySelector('[data-sfx="draw"]'));
         setDraws((n) => n + 1);
         window.clearTimeout(dwellTimer.current);
         if (effectsEnabled()) {
@@ -280,7 +283,7 @@ const Home = () => {
                             onLoaded={setLoadedId}
                             onBroken={setBrokenId}
                         />
-                        <button type="button" onClick={draw} disabled={drawing || hero.isPending} aria-busy={drawing} className="btn btn-accent btn-lg min-w-48">
+                        <button type="button" data-sfx="draw" onClick={draw} disabled={drawing || hero.isPending} aria-busy={drawing} className="btn btn-accent btn-lg min-w-48">
                             {drawing ? <Loader2 size={18} className="animate-spin" aria-hidden="true" /> : <Shuffle size={18} aria-hidden="true" />}
                             Draw a card
                         </button>
@@ -347,8 +350,11 @@ const Home = () => {
                     </dl>
                 )}
 
+                <NewSinceVisit />
+                <TrendingRow />
                 <RecentlyViewed />
                 <PopularTags />
+                <ColorRow />
             </section>
         </div>
     );

@@ -5,6 +5,7 @@ import ImageCard from './ImageCard';
 import { RefreshCw, CloudOff } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { BrowseSource, saveBrowseContext } from '../utils/browseContext';
+import { useDesign } from '../hooks/useDesign';
 
 export interface ImageGridProps {
     images: ImageDto[];
@@ -20,6 +21,10 @@ export interface ImageGridProps {
     readOnly?: boolean;
     showTags?: boolean;
     browseSource?: BrowseSource;
+    selection?: {
+        selected: ReadonlySet<number>;
+        toggle: (id: number, range: boolean) => void;
+    };
 }
 
 const POCKETS = 9;
@@ -44,11 +49,13 @@ const ImageGrid = ({
     emptyState, forceOverlay = false, readOnly = false,
     showTags = false,
     browseSource,
+    selection,
 }: ImageGridProps) => {
     const { user } = useAuth();
     const isAdminOrModerator = user && (user.role === Role.Admin || user.role === Role.Moderator);
     const isAdmin = user && user.role === Role.Admin;
     const location = useLocation();
+    const panels = useDesign() === 'manga';
 
     const rememberList = () => saveBrowseContext({ ids: images.map((img) => img.id), from: `${location.pathname}${location.search}`, source: browseSource });
 
@@ -117,6 +124,9 @@ const ImageGrid = ({
                                 readOnly={readOnly}
                                 showTags={showTags}
                                 onOpen={rememberList}
+                                selected={selection?.selected.has(img.id)}
+                                onToggleSelect={selection?.toggle}
+                                featured={panels && sheet.length === POCKETS && i === (s % 2 === 0 ? 0 : 4)}
                             />
                         ))}
                         {Array.from({ length: (COLUMNS - (sheet.length % COLUMNS)) % COLUMNS }, (_, k) => <EmptyPocket key={`empty-${k}`} />)}

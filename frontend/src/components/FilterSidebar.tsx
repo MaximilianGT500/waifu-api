@@ -7,6 +7,7 @@ import { X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useFilterLabels, rememberLabel } from '../hooks/useFilterLabels';
 import { useDebouncedField } from '../hooks/useDebouncedField';
+import { COLOR_SWATCHES, DEFAULT_COLOR_TOLERANCE, SINCE_OPTIONS, normalizeHex } from '../utils/imageFilters';
 
 interface FilterSidebarProps {
     searchParams: URLSearchParams;
@@ -176,6 +177,29 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
         return [userLabels.get(id) || { id: id, name: `ID: ${id}` }];
     };
 
+    const color = normalizeHex(searchParams.get('color'));
+    const tolerance = searchParams.get('colorTolerance') || String(DEFAULT_COLOR_TOLERANCE);
+    const since = searchParams.get('since') || 'any';
+
+    const setColor = (hex: string | null) => setSearchParams(prev => {
+        if (hex) prev.set('color', hex);
+        else {
+            prev.delete('color');
+            prev.delete('colorTolerance');
+        }
+        return prev;
+    });
+
+    const setSince = (value: string) => setSearchParams(prev => {
+        prev.delete('uploadedAfter');
+        if (value === 'any') prev.delete('since');
+        else prev.set('since', value);
+        return prev;
+    });
+
+    const customColorField = useDebouncedField(color ? `#${color.toLowerCase()}` : '', (v) => setColor(normalizeHex(v)), 300);
+    const toleranceField = useDebouncedField(tolerance, (v) => updateFilter('colorTolerance', v && v !== String(DEFAULT_COLOR_TOLERANCE) ? v : null), 300);
+
     const widthField = useDebouncedField(width, (v) => updateFilter('width', v || null));
     const heightField = useDebouncedField(height, (v) => updateFilter('height', v || null));
     const byteSizeField = useDebouncedField(byteSize, (v) => updateFilter('byteSize', v || null));
@@ -197,6 +221,11 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
         { id: AnimatedMode.All, name: 'Any' },
         { id: AnimatedMode.False, name: 'Static Image' },
         { id: AnimatedMode.True, name: 'Animated (GIF)' }
+    ];
+
+    const sinceOptions = [
+        { id: 'any', name: 'Any time' },
+        ...SINCE_OPTIONS.map((o) => ({ id: o.id, name: o.label })),
     ];
 
     const reviewStatusOptions = [
@@ -305,6 +334,15 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
                             />
                         </div>
                     </fieldset>
+                    <SearchableSelect
+                        label="Uploaded"
+                        options={sinceOptions}
+                        selectedOptions={sinceOptions.filter(o => o.id === since)}
+                        onSelect={(o) => setSince(o.id as string)}
+                        onRemove={() => setSince('any')}
+                        isMulti={false}
+                        clearable={false}
+                    />
                     <div>
                         <label htmlFor={`${idPrefix}-bytes`} className="field-label">File size in bytes</label>
                         <input
@@ -316,6 +354,57 @@ const FilterSidebar = ({ searchParams, setSearchParams, showFilters, setShowFilt
                             className="input"
                         />
                     </div>
+                </section>
+
+                <section className="border-t-2 border-dashed border-border pt-6 md:border-card">
+                    <fieldset>
+                        <legend className="field-label">Dominant color</legend>
+                        <div className="grid grid-cols-7 gap-2">
+                            {COLOR_SWATCHES.map((swatch) => (
+                                <button
+                                    key={swatch.hex}
+                                    type="button"
+                                    title={swatch.name}
+                                    aria-label={swatch.name}
+                                    aria-pressed={color === swatch.hex}
+                                    onClick={() => setColor(color === swatch.hex ? null : swatch.hex)}
+                                    style={{ backgroundColor: `#${swatch.hex}` }}
+                                    className={`aspect-square rounded-full ring-offset-2 ring-offset-background transition-shadow md:ring-offset-sleeve ${color === swatch.hex ? 'ring-2 ring-foreground' : 'ring-1 ring-foreground/15 hover:ring-foreground/45'}`}
+                                />
+                            ))}
+                        </div>
+                        <div className="mt-3 flex items-center gap-2.5">
+                            <input
+                                id={`${idPrefix}-color`}
+                                type="color"
+                                {...customColorField}
+                                value={customColorField.value || '#888888'}
+                                className="size-9 shrink-0 cursor-pointer rounded-full border-0 bg-transparent p-0 [&::-moz-color-swatch]:rounded-full [&::-moz-color-swatch]:border-0 [&::-webkit-color-swatch]:rounded-full [&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-0"
+                            />
+                            <label htmlFor={`${idPrefix}-color`} className="text-sm font-bold">
+                                {color && !COLOR_SWATCHES.some((s) => s.hex === color) ? <span className="font-mono">#{color}</span> : 'Pick any color'}
+                            </label>
+                            {color && (
+                                <button type="button" onClick={() => setColor(null)} className="btn btn-ghost btn-sm ml-auto">Clear</button>
+                            )}
+                        </div>
+                        {color && (
+                            <div className="mt-3">
+                                <label htmlFor={`${idPrefix}-tolerance`} className="field-label flex items-center justify-between">
+                                    Closeness <span className="font-mono text-xs text-muted-foreground">±{toleranceField.value}%</span>
+                                </label>
+                                <input
+                                    id={`${idPrefix}-tolerance`}
+                                    type="range"
+                                    min={4}
+                                    max={40}
+                                    step={1}
+                                    {...toleranceField}
+                                    className="w-full accent-[var(--brand)]"
+                                />
+                            </div>
+                        )}
+                    </fieldset>
                 </section>
 
                 <section className="space-y-4 border-t-2 border-dashed border-border pt-6 md:border-card">

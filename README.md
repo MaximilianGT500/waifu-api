@@ -61,13 +61,25 @@ error formats, review semantics and even the quirks of the old API are reproduce
   description), each with the full gallery and its filters; removable active-filter chips; saved searches (stored
   in the browser, also in the quick search); optional blurring of NSFW previews; “Recently viewed” and “Browse by
   tag” on the home page.
-- 🎴 **Two designs** – the *Collector* design (binder pages with nine card pockets, holo cards, card detail
-  pages, in the colours of the previous design) and the previous *Classic* design; six accent colours to choose
-  from, and animations and effects can be switched off. Visitors switch in the theme menu; the choice is kept in the
-  `waifu_design` cookie and the frontend's nginx serves the matching build on every URL.
+- 🧭 **Discovery** – “Trending this week” (favorites of the last seven days), search by dominant colour (swatches,
+  any colour, adjustable closeness), upload-date filters, “Narrow down” chips with the most frequent tags and artists
+  of the current results, “Looks alike” (perceptual-hash neighbours) and a colour palette (computed in the browser,
+  each colour opens the colour search) on image pages, Atom feeds for any filter combination, “new since your last
+  visit” and “Browse by color” on the home page.
+- ☑️ **Bulk actions** – select several images (<kbd>X</kbd>, <kbd>Shift</kbd>-click for ranges) and favourite them,
+  add them to or remove them from albums in one request, play them as a slideshow, copy a link to them or download
+  them as a ZIP file (built in the browser, up to 60 images).
+- 🙋 **Account page** – counters for uploads, favourites, albums, keys, requests, reports and submissions, all of
+  your uploads including the pending ones, a JSON export of everything stored about the account and the data this
+  browser keeps (recently viewed, saved searches, look, NSFW consent).
+- 🎴 **Three designs** – the *Collector* design (binder pages with nine card pockets, holo cards, card detail
+  pages), the *Manga* design (ink lines, screentone, hard shadows, speed lines, manga pages with a large panel,
+  sound effects and speech-bubble notifications) and the previous *Classic* design; six accent colours, light/dark mode, and animations and effects can be switched off. First-time visitors
+  pick their look on a welcome screen that points out that it can be changed at any time in the theme menu.
 - ⚡ **Performance** – CDN integration with on-the-fly image resizing and single-image cache purging, short-lived
   in-memory caches for public lists with ETag/304 revalidation and cluster-wide invalidation, batched database
-  queries, subsetted self-hosted fonts and responsive images. In the browser: the next gallery page and hovered
+  queries, cached favourite counts, pre-ranked tag and artist lists, gzip-compressed API responses at the gateway,
+  subsetted self-hosted fonts and responsive images. In the browser: the next gallery page and hovered
   images are fetched ahead of time, image pages open instantly from list data, filter inputs are debounced, the
   libraries live in long-cached vendor chunks and all assets are precompressed (gzip -9, served with `gzip_static`).
 - 🔐 **Security** – hashed API keys, strict OAuth state nonce, database-authoritative roles & bans, per-IP rate
@@ -81,7 +93,7 @@ error formats, review semantics and even the quirks of the old API are reproduce
 | Backend    | **Go 1.26+** (net/http, pgx, aws-sdk-go-v2) | REST API, single static binary, stateless – runs as several instances |
 | Gateway    | **nginx** | Load balancer in front of the API instances, the only published API port |
 | Valkey     | **Valkey 9** | Shared rate-limit counters of all API instances (no persistence, restricted ACL user) |
-| Frontend   | **React 19 + Vite 8 + Tailwind CSS 4** | SPA served by nginx, runtime config via `/config.js`, two designs (Collector with Zen Maru Gothic, Classic with M PLUS 1, both self-hosted) |
+| Frontend   | **React 19 + Vite 8 + Tailwind CSS 4** | SPA served by nginx, runtime config via `/config.js`, three designs (Collector with Zen Maru Gothic, Manga with Dela Gothic One and Zen Kaku Gothic New, Classic with M PLUS 1, all self-hosted) |
 | Database   | **PostgreSQL 18** (pgvector image) | All data; EF-Core schema (PascalCase quoted identifiers) used as-is; also coordinates the instances (advisory locks) |
 | Storage    | **Cloudflare R2** (S3-compatible) | Original images, public-read |
 | CDN        | Cloudflare | `CDN_BASE_URL` + optional image resizing (`IMG_TRANSFORM_*`) |
@@ -213,14 +225,32 @@ instance that fails and re-resolves the instances when you scale (`docker compos
 
 ## 🎨 Frontend designs
 
-The frontend ships two builds from one Vite project: `index.html` (*Collector*, the default) and `classic.html`
+The frontend ships two builds from one Vite project: `index.html` (*Collector* and *Manga*) and `classic.html`
 (*Classic*, the previous design, kept in `frontend/src/classic/`). Both use the same API client, contexts, hooks
 and utilities; only components, pages and styles differ, and each page loads only its own CSS and JavaScript.
 
+- *Manga* is a second skin of the Collector build: `public/init.js` sets `html[data-design="manga"]` before the first
+  paint and `src/manga.css` restyles the same components (ink outlines, screentone backgrounds, hard offset
+  shadows, speed lines instead of the holo foil, Dela Gothic One and Zen Kaku Gothic New, self-hosted and only
+  downloaded when the design is active). Switching between Collector and Manga happens without a reload.
+  Every full gallery page is laid out like a manga page (the first or fifth card as a 2×2 panel), “Draw a card” and
+  favouriting show a sound effect (only with animations and effects on), and notifications are speech bubbles.
+- Manga is tuned for smooth rendering: the speed lines are a pre-rendered image moved with `transform` instead of
+  repainted gradients, the screentone sits on one fixed background layer, cards are not lazily rendered and images
+  appear without a fade. In headless Chrome this cut the raster work while hovering cards by about 90 % and the
+  main-thread work while scrolling and loading a 60-image page by about a third compared with the first Manga
+  version. The holo variables are registered with `@property … inherits: false`, so pointer moves only restyle
+  the elements that use them (both designs).
 - The theme menu (sun/moon button) has a **Design** group. Picking a design sets the cookie
-  `waifu_design=collector|classic` (one year, `SameSite=Lax`, `Secure` on HTTPS) and reloads the page.
-- Both designs use the same colours (zinc neutrals, an accent colour, the “API” and “Waifu” gradients); the
-  Collector design adds the binder layout, cards and the holo effects.
+  `waifu_design=collector|manga|classic` (one year, `SameSite=Lax`, `Secure` on HTTPS); switching to or from
+  Classic reloads the page.
+- **Welcome screen:** on the first visit (not for bots, not on the login callback and legal pages) a dialog shows
+  live previews of the three designs, colour mode and accent colour, with a note that all of it can be changed at
+  any time in the theme menu. After closing it, a hint points at the sun/moon button (in Classic a notification);
+  the dialog can be opened again from the account page and the quick search. Its state is the `localStorage` key
+  `welcome-done`.
+- All designs use the same accent colours; the Collector design adds the binder layout, cards and the holo
+  effects, the Manga design draws them in ink.
 - **Accent colours:** the menu offers six presets – Violet (default, the colour of the previous design), Pink,
   Orange, Green, Blue and Mono. A preset sets `html[data-accent]`; both stylesheets define the accent, its text
   shade, the accent button, focus rings, charts and the “Waifu” gradient per preset for light and dark mode (all
@@ -234,7 +264,8 @@ and utilities; only components, pages and styles differ, and each page loads onl
   `Cache-Control: no-cache, private` and `Vary: Cookie`, so shared caches never mix them up. Do not let a CDN cache
   HTML from the frontend container.
 - `npm run dev` and `npm run preview` honour the cookie as well.
-- The cookie is described on the privacy page of both designs. It is only set after a visitor picks a design.
+- The cookie and the `localStorage` keys are described on the privacy page of both builds. The cookie is only set
+  after a visitor picks a design.
 - Quick search, keyboard shortcuts, the active-filter bar, saved searches, API snippets, artist and tag pages, the
   full-screen viewer with slideshow, previous/next navigation, related images, NSFW blurring and “Recently viewed”
   are part of the Collector design; the shared performance work (debounced filters, lazily resolved filter names,
@@ -270,9 +301,11 @@ dates are ISO 8601 UTC, errors are RFC 9457 `application/problem+json`.
 |------|-----------|
 | Auth | `POST /auth/discord`, `GET|POST /auth/api-keys`, `PATCH|DELETE /auth/api-keys/{id}` |
 | Images | `GET /images`, `GET /images/{id}`, `POST /images/upload`, `PATCH|DELETE /images/{id}` |
+| Discovery | `GET /images/facets` (tag/artist counts of a search), `GET /images/feed` (Atom), `GET /images/{id}/similar` |
 | Tags / Artists | `GET|POST /tags[/{id}|/by-slug/{slug}]`, `PATCH|DELETE /tags/{id}` (+ `/artists` analog) |
 | Review | `POST /review/tasks`, `GET /review/tasks[/{id}]`, `PATCH …/{id}`, `…/approve`, `…/reject`, `…/cancel` |
-| Albums | `/users/{userId}/albums` + `/{albumId}[/images[/{imageId}]]` (`me`, `favorites` aliases) |
+| Albums | `/users/{userId}/albums` + `/{albumId}[/images[/{imageId}]]` (`me`, `favorites` aliases), `PATCH …/images` (batch) |
+| Account | `GET /users/me`, `GET /users/me/summary`, `GET /users/me/export` |
 | Reports | `POST /reports`, `GET /reports`, `PATCH /reports/{id}` + `/validate`, `/reject`, `/cancel` |
 | Banner | `GET /banner`, `GET|PUT /banner/settings` |
 | Stats | `GET /stats/public`, `GET /stats/admin` (admin) |
@@ -280,6 +313,10 @@ dates are ISO 8601 UTC, errors are RFC 9457 `application/problem+json`.
 
 Authentication: `Authorization: Bearer <JWT>` or the `X-Api-Key` header. Anonymous access is
 available for browsing (images, tags, artists, public stats, banner).
+
+`GET /images` (and the facets and feed endpoints) also accept `orderBy=Trending`, `color=#RRGGBB` with
+`colorTolerance` (1–100, default 15), `uploadedAfter`/`uploadedBefore` (RFC 3339 or `YYYY-MM-DD`) and, for signed-in
+users, `mine=true`.
 
 ## 🔐 Security
 
@@ -359,7 +396,7 @@ The Go backend reproduces the .NET API exactly, including its historical quirks:
 - `perceptualHash` values (including the byte order of the stored `bit(64)` column) are fully
   interchangeable with the old backend.
 
-Deliberate differences (documented in [`.env.example`](.env.example) and the [changelog](CHANGELOG.md)):
+Deliberate differences (documented in [`.env.example`](.env.example)):
 
 - **Rate limiting** (per-IP token bucket, configurable) – the .NET backend had none.
 - **CORS allowlist** (configurable; `CORS_ALLOW_ALL=true` opens it completely) instead

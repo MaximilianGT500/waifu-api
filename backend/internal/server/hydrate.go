@@ -90,7 +90,7 @@ type imageChildren struct {
 	likedAt   map[int64]*time.Time
 }
 
-func queueImageChildren(b *pgx.Batch, ids []int64, opts hydrateOptions) *imageChildren {
+func (s *Server) queueImageChildren(b *pgx.Batch, ids []int64, opts hydrateOptions) *imageChildren {
 	c := &imageChildren{
 		tags:      map[int64][]tagDto{},
 		artists:   map[int64][]artistDto{},
@@ -151,20 +151,32 @@ func queueImageChildren(b *pgx.Batch, ids []int64, opts hydrateOptions) *imageCh
 		return c
 	}
 
-	b.Queue(`
-		SELECT ai."ImageId", COUNT(*)
-		FROM "AlbumItems" ai JOIN "Albums" al ON al."Id" = ai."AlbumId" AND al."IsDefault"
-		WHERE ai."ImageId" = ANY($1)
-		GROUP BY ai."ImageId"`, ids).Query(func(rows pgx.Rows) error {
-		for rows.Next() {
-			var imageID, n int64
-			if err := rows.Scan(&imageID, &n); err != nil {
+	known, missing, stamp := s.favCounts.lookup(ids)
+	for id, n := range known {
+		c.favorites[id] = n
+	}
+	if len(missing) > 0 {
+		b.Queue(`
+			SELECT ai."ImageId", COUNT(*)
+			FROM "AlbumItems" ai JOIN "Albums" al ON al."Id" = ai."AlbumId" AND al."IsDefault"
+			WHERE ai."ImageId" = ANY($1)
+			GROUP BY ai."ImageId"`, missing).Query(func(rows pgx.Rows) error {
+			fetched := make(map[int64]int64, len(missing))
+			for rows.Next() {
+				var imageID, n int64
+				if err := rows.Scan(&imageID, &n); err != nil {
+					return err
+				}
+				c.favorites[imageID] = n
+				fetched[imageID] = n
+			}
+			if err := rows.Err(); err != nil {
 				return err
 			}
-			c.favorites[imageID] = n
-		}
-		return rows.Err()
-	})
+			s.favCounts.store(stamp, missing, fetched)
+			return nil
+		})
+	}
 
 	if opts.ident != nil {
 		b.Queue(`
@@ -251,7 +263,7 @@ func (s *Server) hydrateImages(ctx context.Context, q querier, rows []imageRow, 
 		return []imageDto{}, nil
 	}
 	b := &pgx.Batch{}
-	children := queueImageChildren(b, imageRowIDs(rows), opts)
+	children := s.queueImageChildren(b, imageRowIDs(rows), opts)
 	if err := q.SendBatch(ctx, b).Close(); err != nil {
 		return nil, err
 	}

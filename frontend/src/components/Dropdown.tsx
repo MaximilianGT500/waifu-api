@@ -25,9 +25,9 @@ export type TriggerProps = {
 
 const TriggerContext = createContext<TriggerProps | null>(null);
 
-export const DropdownTrigger = ({ className, children }: { className?: string; children: ReactNode }) => {
+export const DropdownTrigger = ({ className, children, disabled }: { className?: string; children: ReactNode; disabled?: boolean }) => {
     const props = useContext(TriggerContext);
-    return <button {...props} type="button" className={className}>{children}</button>;
+    return <button {...props} type="button" disabled={disabled} className={className}>{children}</button>;
 };
 
 interface DropdownProps {

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router';
 import { ImageOrderBy, NsfwMode, AnimatedMode, Orientation, ReviewStatusFilter } from '../types';
+import { effectiveUploadedAfter, normalizeHex } from '../utils/imageFilters';
 
 const DEFAULT_PAGE_SIZE = 36;
 
@@ -22,6 +23,10 @@ export const useGalleryParams = (defaultSort = ImageOrderBy.Random) => {
     const excludedIds = searchParams.getAll('excludedIds');
     const uploaderId = searchParams.get('uploaderId') || '';
     const reviewStatus = (searchParams.get('reviewStatus') as ReviewStatusFilter) || ReviewStatusFilter.Accepted;
+    const color = normalizeHex(searchParams.get('color')) ?? '';
+    const colorTolerance = color ? searchParams.get('colorTolerance') || '' : '';
+    const uploadedAfter = effectiveUploadedAfter(searchParams) ?? '';
+    const uploadedBefore = searchParams.get('uploadedBefore') || '';
 
     const pageStr = searchParams.get('page');
     const page = pageStr ? parseInt(pageStr) : 1;
@@ -31,15 +36,15 @@ export const useGalleryParams = (defaultSort = ImageOrderBy.Random) => {
     if (isNaN(pageSize) || pageSize < 1) pageSize = DEFAULT_PAGE_SIZE;
     if (pageSize > 100) pageSize = 100;
 
-    const prevFiltersRef = useRef(JSON.stringify({ isNsfw, orderBy, orientation, isAnimated, height, width, byteSize, includedTags, excludedTags, includedArtists, excludedArtists, includedIds, excludedIds, uploaderId, reviewStatus }));
+    const prevFiltersRef = useRef(JSON.stringify({ isNsfw, orderBy, orientation, isAnimated, height, width, byteSize, includedTags, excludedTags, includedArtists, excludedArtists, includedIds, excludedIds, uploaderId, reviewStatus, color, colorTolerance, uploadedAfter, uploadedBefore }));
 
     useEffect(() => {
-        const currentFilters = JSON.stringify({ isNsfw, orderBy, orientation, isAnimated, height, width, byteSize, includedTags, excludedTags, includedArtists, excludedArtists, includedIds, excludedIds, uploaderId, reviewStatus });
+        const currentFilters = JSON.stringify({ isNsfw, orderBy, orientation, isAnimated, height, width, byteSize, includedTags, excludedTags, includedArtists, excludedArtists, includedIds, excludedIds, uploaderId, reviewStatus, color, colorTolerance, uploadedAfter, uploadedBefore });
         if (prevFiltersRef.current !== currentFilters) {
             if (page !== 1) setSearchParams(prev => { prev.set('page', '1'); return prev; });
             prevFiltersRef.current = currentFilters;
         }
-    }, [isNsfw, orderBy, orientation, isAnimated, height, width, byteSize, includedTags, excludedTags, includedArtists, excludedArtists, includedIds, excludedIds, uploaderId, reviewStatus, page, setSearchParams]);
+    }, [isNsfw, orderBy, orientation, isAnimated, height, width, byteSize, includedTags, excludedTags, includedArtists, excludedArtists, includedIds, excludedIds, uploaderId, reviewStatus, color, colorTolerance, uploadedAfter, uploadedBefore, page, setSearchParams]);
 
     useEffect(() => {
         if (!searchParams.has('orderBy')) setSearchParams(prev => { prev.set('orderBy', defaultSort); return prev; }, { replace: true });
@@ -62,6 +67,10 @@ export const useGalleryParams = (defaultSort = ImageOrderBy.Random) => {
         includedTags, excludedTags, includedArtists, excludedArtists, includedIds, excludedIds,
         uploaderId: uploaderId || undefined,
         reviewStatus: reviewStatus !== ReviewStatusFilter.Accepted ? reviewStatus : undefined,
+        color: color || undefined,
+        colorTolerance: colorTolerance || undefined,
+        uploadedAfter: uploadedAfter || undefined,
+        uploadedBefore: uploadedBefore || undefined,
         page, pageSize
     };
 

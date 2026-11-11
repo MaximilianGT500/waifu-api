@@ -56,14 +56,16 @@ const Privacy = () => {
                     <p className="text-muted-foreground leading-relaxed">
                         This website stores data locally in your browser (localStorage/sessionStorage): your
                         sign-in token, your display preferences (theme, accent color, animations, NSFW consent, dismissed banners,
-                        tag view, blurred NSFW previews, slideshow speed, preferred code language), your saved searches, the images you opened recently (shown under “Recently viewed” on the
-                        home page, where you can remove them), the list you opened an image from (for this tab only, to step
-                        through it) and short-lived technical values used for the login. Apart from the sign-in token, which is
+                        tag view, blurred NSFW previews, slideshow speed, preferred code language), whether you have already seen the
+                        welcome screen, your saved searches, the images you opened recently (shown under “Recently viewed” on the
+                        home page, where you can remove them), the time of your last visit (to count the images uploaded since then),
+                        the list you opened an image from (for this tab only, to step through it) and short-lived technical values used
+                        for the login. Signed-in users can review and clear this data on the account page. Apart from the sign-in token, which is
                         sent to the API to authenticate your requests, this data never leaves your browser. The sign-in token
                         is deleted when you sign out; everything else when you clear your browser storage.
                     </p>
                     <p className="mt-3 text-muted-foreground leading-relaxed">
-                        If you switch the design (Collector or Classic), your choice is stored in a cookie named
+                        If you pick a design (Collector, Manga or Classic), your choice is stored in a cookie named
                         waifu_design for one year. It is only set after you pick a design, is sent only to this
                         website so that the chosen design can be delivered, contains no personal data and is not
                         used for tracking. You can delete it at any time in your browser settings.

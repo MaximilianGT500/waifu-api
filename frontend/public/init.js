@@ -9,12 +9,21 @@
   } catch {}
 
   try {
+    var root = document.documentElement;
+    var cookieDesign = /(?:^|;\s*)waifu_design=manga(?:;|$)/.test(document.cookie);
+    if (cookieDesign && root.getAttribute('data-design') === 'collector') {
+      root.setAttribute('data-design', 'manga');
+    }
+  } catch {}
+
+  try {
     var savedTheme = localStorage.getItem('theme');
     var systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     var dark = savedTheme === 'dark' || ((!savedTheme || savedTheme === 'system') && systemDark);
     document.documentElement.classList.toggle('dark', dark);
     var themeColor = document.querySelector('meta[name="theme-color"]');
-    var color = themeColor && themeColor.getAttribute(dark ? 'data-dark' : 'data-light');
+    var manga = document.documentElement.getAttribute('data-design') === 'manga';
+    var color = themeColor && ((manga && themeColor.getAttribute(dark ? 'data-manga-dark' : 'data-manga-light')) || themeColor.getAttribute(dark ? 'data-dark' : 'data-light'));
     if (color) themeColor.setAttribute('content', color);
   } catch {}
 

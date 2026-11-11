@@ -14,13 +14,17 @@ import FloatingRefreshButton from '../FloatingRefreshButton';
 import ConfirmModal from '../modals/ConfirmModal';
 import ImageModal from '../modals/ImageModal';
 import { Option } from '../SearchableSelect';
-import { Tags, Shuffle, Loader2, Braces, Play, Bookmark, Settings2 } from 'lucide-react';
+import { Tags, Shuffle, Loader2, Braces, Play, Bookmark, Settings2, Rss, Link2, ExternalLink as ExternalLinkIcon, SquareCheckBig } from 'lucide-react';
 import EmptyState from '../EmptyState';
 import { useTagView } from '../../hooks/useTagView';
 import { useHotkeys } from '../../hooks/useHotkeys';
 import ActiveFilters from '../ActiveFilters';
 import ApiRequestDialog from '../modals/ApiRequestDialog';
-import { imageListParams } from '../../utils/apiSnippets';
+import { apiUrl, imageListParams } from '../../utils/apiSnippets';
+import { copyText } from '../../utils/clipboard';
+import RefineBar from '../RefineBar';
+import { sfx } from '../../utils/sfx';
+import SelectionBar from '../SelectionBar';
 import { BrowseSource, saveBrowseContext } from '../../utils/browseContext';
 import { Dropdown, DropdownTrigger, DropdownItem, DropdownSeparator } from '../Dropdown';
 import { SaveSearchDialog, ManageSavedSearchesDialog } from '../modals/SavedSearchesDialog';
@@ -53,7 +57,13 @@ interface GalleryLayoutProps {
     readOnly?: boolean;
     totalCount?: number;
     apiRequest?: GalleryApiRequest;
+    album?: { id: number; name: string };
 }
+
+const FEED_PARAMS = [
+    'isNsfw', 'isAnimated', 'orientation', 'width', 'height', 'byteSize',
+    'includedTags', 'excludedTags', 'includedArtists', 'excludedArtists', 'color', 'colorTolerance',
+];
 
 export const GalleryLayout = ({
                                   images,
@@ -74,6 +84,7 @@ export const GalleryLayout = ({
                                   readOnly = false,
                                   totalCount,
                                   apiRequest,
+                                  album,
                               }: GalleryLayoutProps) => {
     const { user } = useAuth();
     const { showNotification } = useNotification();
@@ -107,10 +118,16 @@ export const GalleryLayout = ({
     const surpriseMe = async () => {
         if (isSurprising) return;
         setIsSurprising(true);
+        sfx('BAM!', document.querySelector('[data-sfx="draw"]'));
         try {
-            const isNsfw = searchParams.get('isNsfw') || NsfwMode.False;
-            const { data } = await api.get<PaginatedList<ImageDto>>('/images', {
-                params: { isNsfw, orderBy: ImageOrderBy.Random, pageSize: 1 },
+            const params = apiRequest
+                ? imageListParams(searchParams, {}, apiRequest.fixed)
+                : new URLSearchParams({ isNsfw: searchParams.get('isNsfw') || NsfwMode.False });
+            params.set('orderBy', ImageOrderBy.Random);
+            params.set('pageSize', '1');
+            params.delete('page');
+            const { data } = await api.get<PaginatedList<ImageDto>>(apiRequest?.path ?? '/images', {
+                params,
                 skipGlobalErrorHandler: true,
             });
             if (data.items.length > 0) {
@@ -119,10 +136,51 @@ export const GalleryLayout = ({
                 showNotification('info', 'No images found for the current filters');
             }
         } catch {
-            showNotification('error', 'Could not fetch a random image');
+            showNotification('error', 'Could not draw a random image');
         } finally {
             setIsSurprising(false);
         }
+    };
+
+    const [isSelecting, setIsSelecting] = useState(false);
+    const [selected, setSelected] = useState<ReadonlySet<number>>(() => new Set());
+    const [lastToggled, setLastToggled] = useState<number | null>(null);
+    const canSelect = !!user && !readOnly;
+
+    const toggleSelected = (id: number, range: boolean) => {
+        const next = new Set(selected);
+        const ids = images.map((img) => img.id);
+        const from = lastToggled === null ? -1 : ids.indexOf(lastToggled);
+        const to = ids.indexOf(id);
+        if (range && from !== -1 && to !== -1) {
+            const [lo, hi] = from < to ? [from, to] : [to, from];
+            for (const value of ids.slice(lo, hi + 1)) next.add(value);
+        } else if (next.has(id)) {
+            next.delete(id);
+        } else {
+            next.add(id);
+        }
+        setSelected(next);
+        setLastToggled(id);
+    };
+
+    const stopSelecting = () => {
+        setIsSelecting(false);
+        setSelected(new Set());
+        setLastToggled(null);
+    };
+
+    const feedUrl = apiRequest?.path === '/images' ? (() => {
+        const all = imageListParams(searchParams, {}, apiRequest.fixed);
+        const params = new URLSearchParams();
+        for (const key of FEED_PARAMS) all.getAll(key).forEach((value) => params.append(key, value));
+        return apiUrl('/images/feed', params);
+    })() : null;
+
+    const copyFeed = async () => {
+        if (!feedUrl) return;
+        if (await copyText(feedUrl)) showNotification('success', 'Feed link copied. Paste it into your feed reader.');
+        else showNotification('error', 'Could not copy to the clipboard');
     };
 
     const isAdmin = user?.role === Role.Admin;
@@ -159,6 +217,15 @@ export const GalleryLayout = ({
         r: () => refetch(),
         d: () => { void surpriseMe(); },
         s: () => startSlideshow(),
+        x: () => {
+            if (!canSelect) return false;
+            if (isSelecting) stopSelecting();
+            else setIsSelecting(true);
+        },
+        Escape: () => {
+            if (!isSelecting) return false;
+            stopSelecting();
+        },
     });
 
     const confirmDelete = (id: number) => {
@@ -191,7 +258,8 @@ export const GalleryLayout = ({
     const defaultSortOptions = [
         { id: ImageOrderBy.Random, name: 'Random Shuffle' },
         { id: ImageOrderBy.UploadedAt, name: 'Newest First' },
-        { id: ImageOrderBy.Favorites, name: 'Most Popular' }
+        { id: ImageOrderBy.Favorites, name: 'Most Popular' },
+        { id: ImageOrderBy.Trending, name: 'Trending this week' }
     ];
 
     return (
@@ -199,8 +267,8 @@ export const GalleryLayout = ({
             <div className="min-w-0 flex-1">
                 <FloatingRefreshButton onRefresh={refetch} />
 
-                <div className="flex flex-col gap-5 px-4 pb-7 pt-7 sm:px-7 md:flex-row md:items-end md:justify-between lg:px-10 lg:pt-10">
-                    <div className="min-w-0 flex-1">
+                <div className="flex flex-col gap-5 px-4 pb-7 pt-7 sm:px-7 md:flex-row md:flex-wrap md:items-end md:justify-between lg:px-10 lg:pt-10">
+                    <div className="min-w-0 flex-1 md:min-w-[19rem]">
                         {headerContent || (
                             <>
                                 <h1 className="page-title">Gallery</h1>
@@ -208,7 +276,7 @@ export const GalleryLayout = ({
                             </>
                         )}
                     </div>
-                    <div className="flex shrink-0 items-center gap-2 self-end md:self-auto">
+                    <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 self-end md:ml-auto md:self-auto max-sm:[&_.btn]:px-3">
                         {canSaveSearches && savedSearches.length > 0 && (
                             <Dropdown
                                 width="w-72"
@@ -227,6 +295,21 @@ export const GalleryLayout = ({
                                 ))}
                                 <DropdownSeparator />
                                 <DropdownItem onClick={() => setIsManageOpen(true)} icon={<Settings2 size={15} />}>Manage saved searches…</DropdownItem>
+                            </Dropdown>
+                        )}
+                        {feedUrl && (
+                            <Dropdown
+                                width="w-64"
+                                label="Subscribe to new images"
+                                trigger={
+                                    <DropdownTrigger className="btn btn-secondary btn-icon">
+                                        <Rss size={16} aria-hidden="true" />
+                                    </DropdownTrigger>
+                                }
+                            >
+                                <p className="px-3 pb-2 pt-1.5 text-xs leading-snug text-muted-foreground">An Atom feed of the newest images that match these filters, for any feed reader.</p>
+                                <DropdownItem onClick={copyFeed} icon={<Link2 size={15} />}>Copy feed link</DropdownItem>
+                                <DropdownItem onClick={() => window.open(feedUrl, '_blank', 'noopener,noreferrer')} icon={<ExternalLinkIcon size={15} />}>Open the feed</DropdownItem>
                             </Dropdown>
                         )}
                         {apiRequest && (
@@ -253,6 +336,7 @@ export const GalleryLayout = ({
                             <span className="hidden xl:inline">Slideshow</span>
                         </button>
                         <button
+                            data-sfx="draw"
                             type="button"
                             onClick={surpriseMe}
                             disabled={isSurprising}
@@ -273,6 +357,19 @@ export const GalleryLayout = ({
                             <Tags size={16} aria-hidden="true" />
                             <span className="hidden lg:inline">Tags</span>
                         </button>
+                        {canSelect && (
+                            <button
+                                type="button"
+                                onClick={() => (isSelecting ? stopSelecting() : setIsSelecting(true))}
+                                title={isSelecting ? 'Stop selecting (X)' : 'Select several images (X)'}
+                                aria-label={isSelecting ? 'Stop selecting' : 'Select images'}
+                                aria-pressed={isSelecting}
+                                className={`btn ${isSelecting ? 'bg-brand-soft text-brand-ink ring-1 ring-brand/30 hover:bg-brand-soft' : 'btn-secondary'}`}
+                            >
+                                <SquareCheckBig size={16} aria-hidden="true" />
+                                <span className="hidden xl:inline">Select</span>
+                            </button>
+                        )}
                         <FilterToggleButton isOpen={showFilters} onToggle={() => setShowFilters(!showFilters)} />
                     </div>
                 </div>
@@ -285,6 +382,9 @@ export const GalleryLayout = ({
                         isLoading={isLoading}
                         onSave={canSaveSearches ? setSaveName : undefined}
                     />
+                    {apiRequest?.path === '/images' && (
+                        <RefineBar searchParams={searchParams} setSearchParams={setSearchParams} fixed={apiRequest.fixed} />
+                    )}
                     <ImageGrid
                         images={images}
                         isLoading={isLoading}
@@ -297,6 +397,7 @@ export const GalleryLayout = ({
                         readOnly={readOnly}
                         showTags={showTags}
                         browseSource={browseSource}
+                        selection={isSelecting ? { selected, toggle: toggleSelected } : undefined}
                         emptyState={emptyState || (
                             <EmptyState
                                 isCheckingAlternatives={false}
@@ -306,6 +407,17 @@ export const GalleryLayout = ({
                             />
                         )}
                     />
+
+                    {isSelecting && (
+                        <SelectionBar
+                            images={images}
+                            selected={selected}
+                            onSelectAll={() => setSelected(new Set(images.map((img) => img.id)))}
+                            onClear={() => setSelected(new Set())}
+                            onExit={stopSelecting}
+                            removeFromAlbum={album && onRemoveFromAlbum ? { ...album, onRemoved: refetch } : undefined}
+                        />
+                    )}
 
                     <Pagination
                         currentPage={page}

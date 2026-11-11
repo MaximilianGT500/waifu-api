@@ -33,6 +33,13 @@ server {
     send_timeout 300s;
 
     limit_conn per_client ${GATEWAY_MAX_CONNECTIONS_PER_CLIENT};
+
+    gzip on;
+    gzip_comp_level 4;
+    gzip_min_length 1024;
+    gzip_proxied any;
+    gzip_vary on;
+    gzip_types application/json application/problem+json application/atom+xml;
     limit_conn_status 429;
 
     # Answers of the gateway itself use the API's error format (RFC 9457 problem details).

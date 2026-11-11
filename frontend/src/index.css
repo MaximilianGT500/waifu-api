@@ -540,13 +540,43 @@
     repeating-linear-gradient(-45deg, var(--card-back-pattern) 0 2px, transparent 2px 14px);
 }
 
+@property --rx {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@property --ry {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@property --mx {
+  syntax: '<percentage>';
+  inherits: false;
+  initial-value: 50%;
+}
+
+@property --my {
+  syntax: '<percentage>';
+  inherits: false;
+  initial-value: 50%;
+}
+
+@property --hx {
+  syntax: '<percentage>';
+  inherits: false;
+  initial-value: 50%;
+}
+
+@property --hy {
+  syntax: '<percentage>';
+  inherits: false;
+  initial-value: 50%;
+}
+
 .holo-card {
-  --rx: 0deg;
-  --ry: 0deg;
-  --mx: 50%;
-  --my: 50%;
-  --hx: 50%;
-  --hy: 50%;
   transform: perspective(56rem) rotateX(var(--rx)) rotateY(var(--ry));
   transition: transform 600ms var(--ease-out-soft), box-shadow 300ms ease;
 }
@@ -704,4 +734,25 @@
     background-image: none;
     color: CanvasText;
   }
+}
+
+@keyframes coach-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--brand) 60%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 0.85rem color-mix(in oklab, var(--brand) 0%, transparent);
+  }
+}
+
+:root[data-coach] .theme-menu-trigger {
+  color: var(--brand-ink);
+  background-color: var(--brand-soft);
+  animation: coach-pulse 1.6s ease-out infinite;
+}
+
+:root[data-coach][data-motion='off'] .theme-menu-trigger {
+  animation: none;
+  box-shadow: 0 0 0 2px var(--brand);
 }

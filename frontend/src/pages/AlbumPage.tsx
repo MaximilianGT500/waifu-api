@@ -189,6 +189,7 @@ const AlbumView = ({ id, userId }: { id: string; userId?: string }) => {
                 totalCount={paginatedImages?.totalCount}
                 apiRequest={{ path: `${apiUserPath}/albums/${id}/images`, defaults: { pageSize: String(filters.pageSize ?? 36) }, needsAuth: true }}
                 onRemoveFromAlbum={setImageToRemove}
+                album={!isViewingOther && album ? { id: album.id, name: album.name } : undefined}
                 readOnly={isViewingOther}
                 emptyState={
                     <EmptyState

@@ -198,6 +198,7 @@ func (c *publicCache[V]) len() int {
 type usageSnapshot struct {
 	ids    []int64
 	counts []int64
+	byID   map[int64]int64
 }
 
 func (s *Server) loadUsage(ctx context.Context, key, query string) (*usageSnapshot, error) {
@@ -210,7 +211,7 @@ func (s *Server) loadUsage(ctx context.Context, key, query string) (*usageSnapsh
 			return nil, 0, err
 		}
 		defer rows.Close()
-		u := &usageSnapshot{ids: []int64{}, counts: []int64{}}
+		u := &usageSnapshot{ids: []int64{}, counts: []int64{}, byID: map[int64]int64{}}
 		for rows.Next() {
 			var id, n int64
 			if err := rows.Scan(&id, &n); err != nil {
@@ -218,13 +219,10 @@ func (s *Server) loadUsage(ctx context.Context, key, query string) (*usageSnapsh
 			}
 			u.ids = append(u.ids, id)
 			u.counts = append(u.counts, n)
+			u.byID[id] = n
 		}
 		return u, 1, rows.Err()
 	})
-}
-
-func usageJoin(alias, target, idsParam, countsParam string) string {
-	return ` LEFT JOIN unnest(` + idsParam + `::bigint[], ` + countsParam + `::bigint[]) AS ` + alias + `(tid, cnt) ON ` + alias + `.tid = ` + target + `."Id"`
 }
 
 func (s *Server) writeScopes(r *http.Request) cacheScope {
@@ -237,7 +235,9 @@ func (s *Server) writeScopes(r *http.Request) cacheScope {
 		path = strings.TrimPrefix(path, "/"+s.base)
 	}
 	switch {
-	case strings.HasPrefix(path, "/auth/"), strings.HasPrefix(path, "/banner"):
+	case strings.HasPrefix(path, "/auth/"), strings.HasPrefix(path, "/banner"), strings.HasPrefix(path, "/reports"):
+		return 0
+	case strings.HasPrefix(path, "/users/") && (strings.HasSuffix(path, "/role") || strings.HasSuffix(path, "/ban")):
 		return 0
 	case strings.HasPrefix(path, "/users/") && strings.Contains(path, "/albums"):
 		return scopeFavorites

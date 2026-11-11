@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { useFilterLabels } from '../hooks/useFilterLabels';
 import { AnimatedMode, NsfwMode, Orientation, ReviewStatusFilter } from '../types';
 import { canModerate } from '../utils/roles';
+import { EXTRA_FILTER_PARAMS, SINCE_OPTIONS, colorName, formatDay, normalizeHex } from '../utils/imageFilters';
 
 type SetSearchParams = (params: URLSearchParams | ((prev: URLSearchParams) => URLSearchParams)) => void;
 
@@ -20,12 +21,14 @@ interface Chip {
     tone: 'neutral' | 'include' | 'exclude';
     remove: (prev: URLSearchParams) => void;
     title: string;
+    swatch?: string;
 }
 
 const FILTER_PARAMS = [
     'isNsfw', 'orientation', 'isAnimated', 'width', 'height', 'byteSize',
     'includedTags', 'excludedTags', 'includedArtists', 'excludedArtists',
     'includedIds', 'excludedIds', 'uploaderId', 'reviewStatus',
+    ...EXTRA_FILTER_PARAMS,
 ];
 
 const TONE: Record<Chip['tone'], string> = {
@@ -74,6 +77,25 @@ const ActiveFilters = ({ searchParams, setSearchParams, totalCount, isLoading = 
     for (const [key, name, unit] of [['width', 'Width', 'px'], ['height', 'Height', 'px'], ['byteSize', 'File size', 'bytes']] as const) {
         const value = searchParams.get(key);
         if (value) chips.push({ key, tone: 'neutral', label: `${name} ${describeRange(value)} ${unit}`, title: `Any ${name.toLowerCase()}`, remove: removeKey(key) });
+    }
+    const color = normalizeHex(searchParams.get('color'));
+    if (color) {
+        chips.push({
+            key: 'color', tone: 'neutral', swatch: `#${color}`, label: `Color: ${colorName(color)}`, title: 'Any color',
+            remove: (prev) => { prev.delete('color'); prev.delete('colorTolerance'); },
+        });
+    }
+    const since = SINCE_OPTIONS.find((o) => o.id === searchParams.get('since'));
+    if (since) {
+        chips.push({ key: 'since', tone: 'neutral', label: since.label, title: 'Any upload date', remove: removeKey('since') });
+    }
+    const uploadedAfter = searchParams.get('uploadedAfter');
+    if (uploadedAfter && !since) {
+        chips.push({ key: 'after', tone: 'neutral', label: `Uploaded after ${formatDay(uploadedAfter)}`, title: 'Any upload date', remove: removeKey('uploadedAfter') });
+    }
+    const uploadedBefore = searchParams.get('uploadedBefore');
+    if (uploadedBefore) {
+        chips.push({ key: 'before', tone: 'neutral', label: `Uploaded before ${formatDay(uploadedBefore)}`, title: 'Any upload date', remove: removeKey('uploadedBefore') });
     }
     for (const slug of searchParams.getAll('includedTags')) {
         const name = tags.get(slug)?.name ?? slug;
@@ -126,6 +148,7 @@ const ActiveFilters = ({ searchParams, setSearchParams, totalCount, isLoading = 
             )}
             {chips.map((chip) => (
                 <span key={chip.key} className={`sticker gap-1 py-0.5 pl-3 pr-1 text-xs ${TONE[chip.tone]}`}>
+                    {chip.swatch && <span className="size-3 shrink-0 rounded-full ring-1 ring-foreground/20" style={{ backgroundColor: chip.swatch }} aria-hidden="true" />}
                     <span className="max-w-[16rem] truncate">{chip.label}</span>
                     <button
                         type="button"

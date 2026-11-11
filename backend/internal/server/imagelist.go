@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/waifu-im/waifu-api/backend/internal/auth"
@@ -16,6 +17,28 @@ const favoritesCountExpr = `(SELECT COUNT(*) FROM "AlbumItems" fai JOIN "Albums"
 const favoritesCountJoin = ` LEFT JOIN (SELECT fai."ImageId" AS iid, COUNT(*) AS cnt FROM "AlbumItems" fai JOIN "Albums" fal ON fal."Id" = fai."AlbumId" AND fal."IsDefault" GROUP BY fai."ImageId") fav ON fav.iid = i."Id"`
 
 const favoritesJoinThreshold = 5000
+
+const trendingJoin = ` LEFT JOIN (SELECT tai."ImageId" AS iid, COUNT(*) AS cnt FROM "AlbumItems" tai JOIN "Albums" tal ON tal."Id" = tai."AlbumId" AND tal."IsDefault" WHERE tai."AddedAt" > now() - interval '7 days' GROUP BY tai."ImageId") tr ON tr.iid = i."Id"`
+
+const trendingOrder = ` ORDER BY COALESCE(tr.cnt, 0) DESC, i."UploadedAt" DESC, i."Id" DESC`
+
+type listOrder uint8
+
+const (
+	orderNewest listOrder = iota
+	orderFavorites
+	orderTrending
+)
+
+func listOrderOf(f *imageFilter) listOrder {
+	switch f.orderBy {
+	case "Favorites":
+		return orderFavorites
+	case "Trending":
+		return orderTrending
+	}
+	return orderNewest
+}
 
 const (
 	imageListMaxEntries = 512
@@ -29,25 +52,37 @@ type imageList struct {
 }
 
 func cacheableImageFilter(f *imageFilter, ident *auth.Identity) bool {
-	if f.reviewStatus != "Accepted" || (f.includeMyPending && ident != nil) {
+	if f.reviewStatus != "Accepted" || (f.includeMyPending && ident != nil) || f.mine {
 		return false
 	}
 	if len(f.includedIDs) > 0 || len(f.excludedIDs) > 0 {
 		return false
 	}
 	switch f.orderBy {
-	case "Random", "UploadedAt", "Favorites":
+	case "Random", "UploadedAt", "Favorites", "Trending":
 		return true
 	}
 	return false
 }
 
-func imageListKey(f *imageFilter, favorites bool) string {
+func imageListKey(f *imageFilter, order listOrder) string {
 	var b strings.Builder
 	for _, v := range []string{f.isNsfw, f.isAnimated, f.orientation, f.width, f.height, f.byteSize} {
 		b.WriteString(v)
 		b.WriteByte(0)
 	}
+	for _, t := range []*time.Time{f.uploadedAfter, f.uploadedBefore} {
+		if t != nil {
+			b.WriteString(strconv.FormatInt(t.UnixMicro(), 36))
+		}
+		b.WriteByte(0)
+	}
+	if f.color != nil {
+		b.WriteString(f.color.hex())
+		b.WriteByte('~')
+		b.WriteString(strconv.Itoa(f.colorTolerance))
+	}
+	b.WriteByte(0)
 	if f.uploaderID != nil {
 		b.WriteString(strconv.FormatInt(*f.uploaderID, 10))
 	}
@@ -56,8 +91,11 @@ func imageListKey(f *imageFilter, favorites bool) string {
 		b.WriteString(strings.Join(list, "\x1f"))
 		b.WriteByte(0)
 	}
-	if favorites {
+	switch order {
+	case orderFavorites:
 		b.WriteString("favorites")
+	case orderTrending:
+		b.WriteString("trending")
 	}
 	return b.String()
 }
@@ -93,12 +131,29 @@ func collectIDs(rows pgx.Rows) ([]int64, error) {
 	return ids, rows.Err()
 }
 
-func (s *Server) buildImageList(ctx context.Context, f *imageFilter, favorites bool) (*imageList, int, error) {
+func (s *Server) buildImageList(ctx context.Context, f *imageFilter, order listOrder) (*imageList, int, error) {
+	if f.color != nil {
+		plain := *f
+		plain.color = nil
+		base, err := s.imageLists.load(ctx, imageListKey(&plain, order), 0, func(ctx context.Context) (*imageList, int, error) {
+			return s.buildImageList(ctx, &plain, order)
+		})
+		if err != nil {
+			return nil, 0, err
+		}
+		colors, err := s.loadColors(ctx)
+		if err != nil {
+			return nil, 0, err
+		}
+		ids := filterByColor(base.ids, colors, *f.color, f.colorTolerance)
+		return &imageList{ids: ids, conds: base.conds, args: base.args}, len(ids) + 64, nil
+	}
+	favorites := order == orderFavorites
 	var base *imageList
 	if favorites {
 		var err error
-		base, err = s.imageLists.load(ctx, imageListKey(f, false), 0, func(ctx context.Context) (*imageList, int, error) {
-			return s.buildImageList(ctx, f, false)
+		base, err = s.imageLists.load(ctx, imageListKey(f, orderNewest), 0, func(ctx context.Context) (*imageList, int, error) {
+			return s.buildImageList(ctx, f, orderNewest)
 		})
 		if err != nil {
 			return nil, 0, err
@@ -120,6 +175,9 @@ func (s *Server) buildImageList(ctx context.Context, f *imageFilter, favorites b
 		} else {
 			query = `SELECT i."Id" FROM "Images" i` + whereClause(conds) + ` ORDER BY ` + favoritesCountExpr + ` DESC, i."Id" DESC`
 		}
+	}
+	if order == orderTrending {
+		query = `SELECT i."Id" FROM "Images" i` + trendingJoin + whereClause(conds) + trendingOrder
 	}
 	rows, err := s.db.Query(ctx, query, append([]any{pgx.QueryExecModeCacheDescribe}, args...)...)
 	if err != nil {
@@ -159,14 +217,10 @@ func randomSample(ids []int64, n int) []int64 {
 }
 
 func (s *Server) listImagesFromCache(ctx context.Context, f *imageFilter, page, pageSize int, opts hydrateOptions) ([]imageDto, int64, bool, error) {
-	favorites := f.orderBy == "Favorites"
-	key := imageListKey(f, favorites)
-	var scopes cacheScope
-	if favorites {
-		scopes = scopeFavorites
-	}
-	list, err := s.imageLists.load(ctx, key, scopes, func(ctx context.Context) (*imageList, int, error) {
-		return s.buildImageList(ctx, f, favorites)
+	order := listOrderOf(f)
+	key := imageListKey(f, order)
+	list, err := s.imageLists.load(ctx, key, 0, func(ctx context.Context) (*imageList, int, error) {
+		return s.buildImageList(ctx, f, order)
 	})
 	if err != nil {
 		return nil, 0, false, err
@@ -196,7 +250,7 @@ func (s *Server) listImagesFromCache(ctx context.Context, f *imageFilter, page, 
 		}
 		return rows.Err()
 	})
-	children := queueImageChildren(b, pick, opts)
+	children := s.queueImageChildren(b, pick, opts)
 	if err := s.db.SendBatch(ctx, b).Close(); err != nil {
 		return nil, 0, false, err
 	}
@@ -253,6 +307,9 @@ func (s *Server) queryImagePage(ctx context.Context, f *imageFilter, ident *auth
 		} else {
 			order = ` ORDER BY ` + favoritesCountExpr + ` DESC, i."Id" DESC`
 		}
+	case "Trending":
+		from += trendingJoin
+		order = trendingOrder
 	case "AddedToAlbum":
 		order = ` ORDER BY ai."AddedAt" DESC, i."Id" DESC`
 	default:

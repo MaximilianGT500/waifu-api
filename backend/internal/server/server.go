@@ -49,6 +49,11 @@ type Server struct {
 	versionSync versionSync
 	imageLists  *publicCache[*imageList]
 	usageCounts *publicCache[*usageSnapshot]
+	rankedLists *publicCache[*rankedIDs]
+	colorIndex  *publicCache[*colorSnapshot]
+	facets      *publicCache[*facetResult]
+	similar     *publicCache[*rankedIDs]
+	favCounts   *favoriteCounts
 
 	bgCancel context.CancelFunc
 	bgWG     sync.WaitGroup
@@ -97,6 +102,11 @@ func New(cfg *config.Config, pool *db.Pool, store ObjectStore, discord DiscordAu
 	ttl := cfg.Cache.PublicTTL
 	s.imageLists = newPublicCache[*imageList](ttl, scopeContent, &s.versions, imageListMaxEntries, imageListMaxIDs)
 	s.usageCounts = newPublicCache[*usageSnapshot](ttl, scopeContent, &s.versions, 4, 0)
+	s.rankedLists = newPublicCache[*rankedIDs](ttl, scopeContent, &s.versions, 64, 4_000_000)
+	s.colorIndex = newPublicCache[*colorSnapshot](ttl, scopeContent, &s.versions, 1, 0)
+	s.facets = newPublicCache[*facetResult](ttl, scopeContent, &s.versions, 256, 0)
+	s.similar = newPublicCache[*rankedIDs](ttl, scopeContent, &s.versions, 2048, 0)
+	s.favCounts = newFavoriteCounts(ttl, &s.versions, favoriteCountsMaxItems)
 	return s
 }
 
@@ -122,6 +132,8 @@ func (s *Server) RegisterAll() {
 	s.RegisterHealthRoutes()
 	s.RegisterOpenAPIRoutes()
 	s.RegisterImageRoutes()
+	s.RegisterDiscoveryRoutes()
+	s.RegisterAccountRoutes()
 	s.RegisterTagRoutes()
 	s.RegisterArtistRoutes()
 	s.RegisterUserRoutes()

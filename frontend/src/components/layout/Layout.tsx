@@ -5,14 +5,15 @@ import {
     Sun, Moon, Menu, X, LogOut, Upload as UploadIcon,
     Home, Image as ImageIcon, Tag as TagIcon,
     User as UserIcon, Library, ChevronDown, Palette, Key, Users as UsersIcon, Flag, BarChart, Monitor, HardDrive, GitPullRequest, Megaphone,
-    LucideIcon, Sparkles, History, WandSparkles, Search, Info, Shield, Mail, EyeOff,
+    LucideIcon, Sparkles, History, WandSparkles, Search, Info, Shield, Mail, EyeOff, BookOpen,
 } from 'lucide-react';
 import { useState, useEffect, useRef, Suspense, ReactNode, ButtonHTMLAttributes, lazy } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import GlobalErrorHandler from '../GlobalErrorHandler';
 import { Dropdown, DropdownTrigger, DropdownItem, DropdownLabel, DropdownSeparator, DropdownSwatch } from '../Dropdown';
 import { getEnv } from '../../utils/env';
-import { DESIGNS, currentDesign, switchDesign } from '../../utils/design';
+import { DESIGNS, Design, switchDesign } from '../../utils/design';
+import { useDesign } from '../../hooks/useDesign';
 import { ACCENTS } from '../../utils/accent';
 import { Role } from '../../types';
 import { useNavBadges, invalidateNavBadges } from '../../hooks/useNavBadges';
@@ -26,9 +27,12 @@ import { safeExternalUrl } from '../../utils/safeUrl';
 import { useHotkeys, dialogOpen, modKeyLabel } from '../../hooks/useHotkeys';
 import { readNsfwBlur, setNsfwBlur } from '../../utils/nsfwBlur';
 import type { PaletteDestination } from '../CommandPalette';
+import ThemeHint from '../ThemeHint';
+import { WELCOME_EVENT, shouldWelcome, takeDesignHint } from '../../utils/welcome';
 
 const CommandPalette = lazy(() => import('../CommandPalette'));
 const ShortcutsDialog = lazy(() => import('../ShortcutsDialog'));
+const WelcomeDialog = lazy(() => import('../WelcomeDialog'));
 
 interface NavEntry {
     key: string;
@@ -67,9 +71,11 @@ const Brand = ({ title, compact = false }: { title: string; compact?: boolean })
             height={38}
             className="size-[2.375rem] shrink-0 -rotate-6 rounded-[0.75rem] bg-card object-cover p-0.5 shadow-card"
         />
-        <span className={`truncate text-lg font-black tracking-[-0.01em] ${compact ? 'hidden sm:block' : ''}`}>{title}</span>
+        <span className={`brand-title truncate text-lg font-black tracking-[-0.01em] ${compact ? 'hidden sm:block' : ''}`}>{title}</span>
     </Link>
 );
+
+const DesignIcon = ({ design }: { design: Design }) => design === 'collector' ? <Sparkles size={16} /> : design === 'manga' ? <BookOpen size={16} /> : <History size={16} />;
 
 const HeaderIconButton = ({ children, ...rest }: { children: ReactNode } & ButtonHTMLAttributes<HTMLButtonElement>) => (
     <button
@@ -83,7 +89,7 @@ const HeaderIconButton = ({ children, ...rest }: { children: ReactNode } & Butto
 
 const Layout = () => {
     const { theme, setTheme, resolvedTheme, motionEnabled, setMotionEnabled, accent, setAccent } = useTheme();
-    const design = currentDesign();
+    const design = useDesign();
     const { user, token, logout } = useAuth();
     const location = useLocation();
     const navigationType = useNavigationType();
@@ -127,6 +133,16 @@ const Layout = () => {
             if (menuButton && menuButton.getClientRects().length > 0) menuButton.focus({ preventScroll: true });
         };
     }, [isMobileMenuOpen]);
+
+    const [welcome, setWelcome] = useState<'first' | 'revisit' | null>(() => (shouldWelcome(location.pathname) ? 'first' : null));
+    const [isHintOpen, setIsHintOpen] = useState(false);
+
+    useEffect(() => {
+        if (takeDesignHint()) setIsHintOpen(true);
+        const open = () => setWelcome('revisit');
+        window.addEventListener(WELCOME_EVENT, open);
+        return () => window.removeEventListener(WELCOME_EVENT, open);
+    }, []);
 
     const [isPaletteOpen, setIsPaletteOpen] = useState(false);
     const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
@@ -195,6 +211,7 @@ const Layout = () => {
     const destinations: PaletteDestination[] = [
         ...tabs,
         ...(user ? [
+            { key: 'account', to: '/account', label: 'Account', icon: UserIcon },
             { key: 'my-albums', to: '/albums', label: 'My Albums', icon: Library },
             { key: 'api-keys', to: '/api-keys', label: 'API Keys', icon: Key },
             ...(!isModOrAdmin ? [
@@ -270,44 +287,48 @@ const Layout = () => {
                             <span className="hidden flex-1 text-left md:inline">Search…</span>
                             <kbd className="hidden rounded-md border border-border px-1.5 py-px font-mono text-[0.6875rem] text-muted-foreground md:inline" aria-hidden="true">{modLabel} K</kbd>
                         </button>
-                        <Dropdown
-                            width="w-[17rem]"
-                            label="Change color theme, accent, design and effects"
-                            trigger={
-                                <DropdownTrigger className="grid size-10 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-card hover:text-foreground">
-                                    {resolvedTheme === 'light' ? <Sun size={19} aria-hidden="true" /> : <Moon size={19} aria-hidden="true" />}
-                                </DropdownTrigger>
-                            }
-                        >
-                            <div role="group" aria-label="Color theme">
-                                <DropdownLabel>Color theme</DropdownLabel>
-                                <DropdownItem onClick={() => setTheme('light')} active={theme === 'light'} icon={<Sun size={16} />}>Light</DropdownItem>
-                                <DropdownItem onClick={() => setTheme('dark')} active={theme === 'dark'} icon={<Moon size={16} />}>Dark</DropdownItem>
-                                <DropdownItem onClick={() => setTheme('system')} active={theme === 'system'} icon={<Monitor size={16} />}>System</DropdownItem>
-                            </div>
-                            <DropdownSeparator />
-                            <div role="group" aria-label="Accent color">
-                                <DropdownLabel>Accent color</DropdownLabel>
-                                <div role="none" className="flex flex-wrap gap-2 px-3 pb-2 pt-1">
-                                    {ACCENTS.map(({ id, label, swatch }) => (
-                                        <DropdownSwatch key={id} color={swatch} label={label} active={accent === id} onClick={() => setAccent(id)} />
+                        <div className="relative">
+                            <Dropdown
+                                width="w-[17rem]"
+                                label="Change color theme, accent, design and effects"
+                                onOpen={() => setIsHintOpen(false)}
+                                trigger={
+                                    <DropdownTrigger className="theme-menu-trigger grid size-10 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-card hover:text-foreground">
+                                        {resolvedTheme === 'light' ? <Sun size={19} aria-hidden="true" /> : <Moon size={19} aria-hidden="true" />}
+                                    </DropdownTrigger>
+                                }
+                            >
+                                <div role="group" aria-label="Color theme">
+                                    <DropdownLabel>Color theme</DropdownLabel>
+                                    <DropdownItem onClick={() => setTheme('light')} active={theme === 'light'} icon={<Sun size={16} />}>Light</DropdownItem>
+                                    <DropdownItem onClick={() => setTheme('dark')} active={theme === 'dark'} icon={<Moon size={16} />}>Dark</DropdownItem>
+                                    <DropdownItem onClick={() => setTheme('system')} active={theme === 'system'} icon={<Monitor size={16} />}>System</DropdownItem>
+                                </div>
+                                <DropdownSeparator />
+                                <div role="group" aria-label="Accent color">
+                                    <DropdownLabel>Accent color</DropdownLabel>
+                                    <div role="none" className="flex flex-wrap gap-2 px-3 pb-2 pt-1">
+                                        {ACCENTS.map(({ id, label, swatch }) => (
+                                            <DropdownSwatch key={id} color={swatch} label={label} active={accent === id} onClick={() => setAccent(id)} />
+                                        ))}
+                                    </div>
+                                </div>
+                                <DropdownSeparator />
+                                <div role="group" aria-label="Design">
+                                    <DropdownLabel>Design</DropdownLabel>
+                                    {DESIGNS.map(({ id, label }) => (
+                                        <DropdownItem key={id} onClick={() => switchDesign(id)} active={design === id} icon={<DesignIcon design={id} />}>{label}</DropdownItem>
                                     ))}
                                 </div>
-                            </div>
-                            <DropdownSeparator />
-                            <div role="group" aria-label="Design">
-                                <DropdownLabel>Design</DropdownLabel>
-                                {DESIGNS.map(({ id, label }) => (
-                                    <DropdownItem key={id} onClick={() => switchDesign(id)} active={design === id} icon={id === 'collector' ? <Sparkles size={16} /> : <History size={16} />}>{label}</DropdownItem>
-                                ))}
-                            </div>
-                            <DropdownSeparator />
-                            <div role="group" aria-label="Effects">
-                                <DropdownLabel>Effects</DropdownLabel>
-                                <DropdownItem checkbox onClick={() => setMotionEnabled(!motionEnabled)} active={motionEnabled} icon={<WandSparkles size={16} />}>Animations and effects</DropdownItem>
-                                <DropdownItem checkbox onClick={toggleBlurNsfw} active={blurNsfw} icon={<EyeOff size={16} />}>Blur NSFW previews</DropdownItem>
-                            </div>
-                        </Dropdown>
+                                <DropdownSeparator />
+                                <div role="group" aria-label="Effects">
+                                    <DropdownLabel>Effects</DropdownLabel>
+                                    <DropdownItem checkbox onClick={() => setMotionEnabled(!motionEnabled)} active={motionEnabled} icon={<WandSparkles size={16} />}>Animations and effects</DropdownItem>
+                                    <DropdownItem checkbox onClick={toggleBlurNsfw} active={blurNsfw} icon={<EyeOff size={16} />}>Blur NSFW previews</DropdownItem>
+                                </div>
+                            </Dropdown>
+                            {isHintOpen && <ThemeHint onClose={() => setIsHintOpen(false)} />}
+                        </div>
 
                         {user ? (
                             <Dropdown
@@ -336,6 +357,7 @@ const Layout = () => {
                                 </div>
 
                                 <DropdownLabel>Your collection</DropdownLabel>
+                                <DropdownItem to="/account" icon={<UserIcon size={16} />}>Account</DropdownItem>
                                 <DropdownItem to="/upload" icon={<UploadIcon size={16} />}>Upload Image</DropdownItem>
                                 <DropdownItem to="/albums" icon={<Library size={16} />}>My Albums</DropdownItem>
                                 <DropdownItem to="/api-keys" icon={<Key size={16} />}>API Keys</DropdownItem>
@@ -382,6 +404,18 @@ const Layout = () => {
                     </div>
                 </div>
             </header>
+
+            {welcome && (
+                <Suspense fallback={null}>
+                    <WelcomeDialog
+                        revisit={welcome === 'revisit'}
+                        onDone={(changed) => {
+                            setWelcome(null);
+                            if (changed || welcome === 'first') setIsHintOpen(true);
+                        }}
+                    />
+                </Suspense>
+            )}
 
             {(isPaletteOpen || isShortcutsOpen) && (
                 <Suspense fallback={null}>

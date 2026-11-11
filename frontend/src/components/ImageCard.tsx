@@ -1,5 +1,5 @@
 import { ImageDto, Role, ReviewStatus } from '../types';
-import { Heart, Trash2, Pencil, FolderMinus, FolderPlus, Clock, GitPullRequest, ImageOff } from 'lucide-react';
+import { Heart, Trash2, Pencil, FolderMinus, FolderPlus, Clock, GitPullRequest, ImageOff, Check } from 'lucide-react';
 import { Link } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import TagChip from './TagChip';
@@ -7,6 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import { useMyPendingImageEdits } from '../hooks/useMyPendingImageEdits';
 import { useAuthGuard } from '../hooks/useRequireAuth';
 import { useHolo } from '../hooks/useHolo';
+import { sfx } from '../utils/sfx';
 import { ReactNode, useEffect, useRef, useState, MouseEvent } from 'react';
 import api from '../services/api';
 import AlbumSelectionModal from './modals/AlbumSelectionModal';
@@ -28,11 +29,15 @@ interface ImageCardProps {
     readOnly?: boolean;
     showTags?: boolean;
     onOpen?: () => void;
+    selected?: boolean;
+    onToggleSelect?: (id: number, range: boolean) => void;
+    featured?: boolean;
 }
 
 const INTENT_DELAY_MS = 90;
 
 export const CARD_SIZES = '(min-width: 1280px) 13rem, (min-width: 1024px) 16rem, (min-width: 640px) 30vw, 32vw';
+const FEATURED_CARD_SIZES = '(min-width: 1280px) 27rem, (min-width: 1024px) 33rem, (min-width: 640px) 62vw, 66vw';
 
 const OverlayButton = ({ label, onClick, children, danger = false }: { label: string; onClick: () => void; children: ReactNode; danger?: boolean }) => (
     <button
@@ -54,7 +59,7 @@ const CornerSticker = ({ children, tone }: { children: ReactNode; tone: 'nsfw' |
 
 const TAG_CAP = 6;
 
-const ImageCard = ({ image, eager = false, priority = false, onDelete, onRemove, onEdit, onSuggest, forceOverlay = false, readOnly = false, showTags = false, onOpen }: ImageCardProps) => {
+const ImageCard = ({ image, eager = false, priority = false, onDelete, onRemove, onEdit, onSuggest, forceOverlay = false, readOnly = false, showTags = false, onOpen, selected = false, onToggleSelect, featured = false }: ImageCardProps) => {
     const { user } = useAuth();
     const checkAuth = useAuthGuard();
     const queryClient = useQueryClient();
@@ -114,6 +119,7 @@ const ImageCard = ({ image, eager = false, priority = false, onDelete, onRemove,
 
         setIsLikeLoading(true);
         const prevLiked = isLiked;
+        if (!prevLiked) sfx('DOKI!', e.currentTarget as Element);
         const nextCount = prevLiked ? likesCount - 1 : likesCount + 1;
         setIsLiked(!prevLiked);
         setLikesCount(nextCount);
@@ -150,16 +156,34 @@ const ImageCard = ({ image, eager = false, priority = false, onDelete, onRemove,
         });
     };
 
-    const showActions = !readOnly && (!!user || !!onRemove) || !!onEdit || !!onSuggest || (!!onDelete && !!isAdmin);
+    const selecting = !!onToggleSelect;
+    const showActions = !selecting && (!readOnly && (!!user || !!onRemove) || !!onEdit || !!onSuggest || (!!onDelete && !!isAdmin));
     const revealOnHover = forceOverlay ? 'flex' : 'hidden @[8.5rem]:flex xl:opacity-0 xl:group-hover:opacity-100 xl:group-focus-within:opacity-100';
 
     return (
-        <article className="@container group relative flex min-w-0 flex-col [contain-intrinsic-size:auto_16rem] [content-visibility:auto]">
+        <article data-featured={featured ? '' : undefined} className="card-shell @container group relative flex min-w-0 flex-col [contain-intrinsic-size:auto_16rem] [content-visibility:auto]">
             <div
                 onPointerMove={holo.onPointerMove}
                 onPointerLeave={holo.onPointerLeave}
-                className="holo-card relative rounded-[1.125rem] bg-card p-1.5 shadow-card ring-offset-2 ring-offset-background hover:shadow-lift has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring dark:ring-1 dark:ring-white/6"
+                data-selected={selected ? '' : undefined}
+                className={`holo-card relative rounded-[1.125rem] bg-card p-1.5 shadow-card ring-offset-2 ring-offset-background hover:shadow-lift has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring has-[button[aria-pressed]:focus-visible]:ring-2 has-[button[aria-pressed]:focus-visible]:ring-ring dark:ring-1 dark:ring-white/6 ${selected ? 'ring-[3px]! ring-inset! ring-brand! dark:ring-brand!' : ''}`}
             >
+                {selecting && (
+                    <button
+                        type="button"
+                        aria-pressed={selected}
+                        aria-label={`Select image #${image.id}`}
+                        onClick={(e) => onToggleSelect(image.id, e.shiftKey)}
+                        className="absolute inset-0 z-10 cursor-pointer rounded-[inherit] outline-none"
+                    >
+                        <span
+                            aria-hidden="true"
+                            className={`absolute right-3 top-3 grid size-7 place-items-center rounded-full shadow-card transition-colors ${selected ? 'bg-brand text-white' : 'bg-card/90 text-transparent ring-2 ring-inset ring-foreground/30'}`}
+                        >
+                            <Check size={16} strokeWidth={3} />
+                        </span>
+                    </button>
+                )}
                 <Link
                     to={`/images/${image.id}`}
                     onClick={onOpen}
@@ -180,7 +204,7 @@ const ImageCard = ({ image, eager = false, priority = false, onDelete, onRemove,
                         <img
                             src={imgCard(image.url)}
                             srcSet={imgCardSrcSet(image.url, image.width)}
-                            sizes={CARD_SIZES}
+                            sizes={featured ? FEATURED_CARD_SIZES : CARD_SIZES}
                             alt={altText}
                             width={image.width}
                             height={image.height}

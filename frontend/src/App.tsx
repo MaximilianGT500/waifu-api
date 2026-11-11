@@ -26,6 +26,7 @@ const SiteBannerSettings = lazy(() => import('./pages/SiteBannerSettings'))
 const NotFound = lazy(() => import('./pages/NotFound'))
 const ArtistPage = lazy(() => import('./pages/ArtistPage'))
 const TagPage = lazy(() => import('./pages/TagPage'))
+const Account = lazy(() => import('./pages/Account'))
 
 function App() {
     return (
@@ -49,6 +50,7 @@ function App() {
                 <Route path="reports" element={<Reports />} />
                 <Route path="users" element={<Users />} />
                 <Route path="api-keys" element={<ApiKeys />} />
+                <Route path="account" element={<Account />} />
                 <Route path="stats" element={<AdminStats />} />
                 <Route path="storage-diff" element={<StorageDiff />} />
                 <Route path="site-banner" element={<SiteBannerSettings />} />

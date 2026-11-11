@@ -135,6 +135,7 @@ export enum ImageOrderBy {
   Random = 'Random',
   UploadedAt = 'UploadedAt',
   Favorites = 'Favorites',
+  Trending = 'Trending',
   AddedToAlbum = 'AddedToAlbum'
 }
 
@@ -296,4 +297,35 @@ export interface UploadLimits {
 export interface UserPermissions {
   canManageBanner: boolean;
   upload?: UploadLimits;
+}
+
+export interface FacetEntry {
+  id: number;
+  name: string;
+  slug?: string;
+  count: number;
+}
+
+export interface ImageFacets {
+  totalCount: number;
+  tags: FacetEntry[];
+  artists: FacetEntry[];
+}
+
+export interface AlbumBatchResult {
+  added: number;
+  removed: number;
+  skipped: number[];
+  imageCount: number;
+}
+
+export interface AccountSummary {
+  uploads: { accepted: number; pending: number; rejected: number };
+  favorites: number;
+  albums: number;
+  albumImages: number;
+  apiKeys: number;
+  reports: { pending: number; total: number };
+  submissions: { pending: number; total: number };
+  requests: { total: number; apiKey: number; jwt: number };
 }
